@@ -5,6 +5,7 @@ import clsx from 'clsx'
 import { useTranslate, MenuItemLink, getResources } from 'react-admin'
 import ViewListIcon from '@material-ui/icons/ViewList'
 import AlbumIcon from '@material-ui/icons/Album'
+import SearchIcon from '@material-ui/icons/Search'
 import SubMenu from './SubMenu'
 import { humanize, pluralize } from 'inflection'
 import albumLists from '../album/albumLists'
@@ -40,9 +41,9 @@ const translatedResourceName = (resource, translate) =>
     _:
       resource.options && resource.options.label
         ? translate(resource.options.label, {
-            smart_count: 2,
-            _: resource.options.label,
-          })
+          smart_count: 2,
+          _: resource.options.label,
+        })
         : humanize(pluralize(resource.name)),
   })
 
@@ -125,6 +126,14 @@ const Menu = ({ dense = false }) => {
           renderAlbumMenuItemLink(type, albumLists[type]),
         )}
       </SubMenu>
+      <MenuItemLink
+        to="/online/search"
+        activeClassName={classes.active}
+        primaryText={translate('menu.onlineSearch', { _: '在线搜索' })}
+        leftIcon={<SearchIcon />}
+        sidebarIsOpen={open}
+        dense={dense}
+      />
       {resources.filter(subItems(undefined)).map(renderResourceMenuItemLink)}
       {config.devSidebarPlaylists && open ? (
         <>

@@ -321,7 +321,7 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
             className={classes.root}
             activeClassName={classes.active}
             to="/online"
-            primaryText={translate('menu.online', { _: 'Online' })}
+            primaryText={translate('menu.onlineSettings', { _: '在线设置' })}
             leftIcon={<MdPublic size={24} />}
             onClick={onClick}
             sidebarIsOpen={true}
