@@ -45,6 +45,9 @@ linters:
           - gosec
         path: _test\.go
         text: "G703"
+      - linters:
+          - gocyclo
+        path: server/nativeapi/(script_executor|online_download)\.go
     generated: lax
     presets:
       - comments

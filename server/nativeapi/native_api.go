@@ -58,6 +58,7 @@ func (api *Router) routes() http.Handler {
 
 	// Public
 	api.RX(r, "/translation", newTranslationRepository, false)
+	api.addOnlineSearchRoutes(r)
 
 	// Protected
 	r.Group(func(r chi.Router) {
@@ -84,12 +85,15 @@ func (api *Router) routes() http.Handler {
 		api.addMissingFilesRoute(r)
 		api.addKeepAliveRoute(r)
 		api.addInsightsRoute(r)
+		api.addOnlineSourceStatusRoute(r)
+		api.addOnlineDownloadRoutes(r)
 
 		r.With(adminOnlyMiddleware).Group(func(r chi.Router) {
 			api.addInspectRoute(r)
 			api.addConfigRoute(r)
 			api.addUserLibraryRoute(r)
 			api.addPluginRoute(r)
+			api.addOnlineSourceRoute(r)
 			api.RX(r, "/library", api.libs.NewRepository, true)
 		})
 	})

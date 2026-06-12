@@ -27,7 +27,11 @@ import { startEventStream } from '../eventStream'
 import { useDispatch } from 'react-redux'
 
 const useStyles = makeStyles((theme) => ({
-  user: {},
+  user: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(0.5),
+  },
   button: {
     color: 'inherit',
   },
@@ -54,7 +58,7 @@ const UserMenu = (props) => {
   const classes = useStyles(props)
   const dispatch = useDispatch()
 
-  const { children, label, icon, logout } = props
+  const { children, label, icon, logout, beforeContent } = props
 
   useEffect(() => {
     if (config.devActivityPanel) {
@@ -73,6 +77,7 @@ const UserMenu = (props) => {
 
   return (
     <div className={classes.user}>
+      {beforeContent || null}
       <Tooltip title={label && translate(label, { _: label })}>
         <IconButton
           className={classes.button}
@@ -130,6 +135,7 @@ const UserMenu = (props) => {
 }
 
 UserMenu.propTypes = {
+  beforeContent: PropTypes.node,
   children: PropTypes.node,
   label: PropTypes.string.isRequired,
   logout: PropTypes.element,
