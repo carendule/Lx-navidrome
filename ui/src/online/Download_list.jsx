@@ -190,6 +190,29 @@ const DownloadList = ({
         return Math.round(totalProgress / tasks.length)
     }
 
+    // Sort tasks: active tasks first (by reverse insertion order), then completed tasks
+    const sortedTasks = React.useMemo(() => {
+        if (!tasks || tasks.length === 0) return []
+
+        const activeTasks = []
+        const completedTasks = []
+
+        tasks.forEach((task, index) => {
+            if (task.status === 'completed') {
+                completedTasks.push({ ...task, _index: index })
+            } else {
+                activeTasks.push({ ...task, _index: index })
+            }
+        })
+
+        // Sort active tasks by reverse insertion order (newest first)
+        activeTasks.sort((a, b) => b._index - a._index)
+        // Sort completed tasks by reverse insertion order
+        completedTasks.sort((a, b) => b._index - a._index)
+
+        return [...activeTasks, ...completedTasks]
+    }, [tasks])
+
     return (
         <Fade in={open} timeout={180}>
             <Box className={classes.wrapper}>
@@ -211,25 +234,25 @@ const DownloadList = ({
                             总进度: {calculateTotalProgress()}%
                         </Typography>
                         <Box className={classes.actionRow}>
-                            <Button 
-                                variant="outlined" 
-                                size="small" 
+                            <Button
+                                variant="outlined"
+                                size="small"
                                 className={classes.actionBtn}
                                 onClick={onRetryAll}
                             >
                                 全部重试
                             </Button>
-                            <Button 
-                                variant="outlined" 
-                                size="small" 
+                            <Button
+                                variant="outlined"
+                                size="small"
                                 className={classes.actionBtn}
                                 onClick={onCancelAll}
                             >
                                 全部取消
                             </Button>
-                            <Button 
-                                variant="outlined" 
-                                size="small" 
+                            <Button
+                                variant="outlined"
+                                size="small"
                                 className={classes.actionBtn}
                                 onClick={onClearCompleted}
                             >
@@ -245,9 +268,9 @@ const DownloadList = ({
                             <Box className={classes.empty}>暂无下载任务</Box>
                         )}
 
-                        {tasks.map((task) => (
-                            <Box 
-                                key={task.id} 
+                        {sortedTasks.map((task) => (
+                            <Box
+                                key={task.id}
                                 className={classes.taskCard}
                                 onClick={() => onToggleTask && onToggleTask(task.id)}
                                 style={{ cursor: 'pointer' }}
