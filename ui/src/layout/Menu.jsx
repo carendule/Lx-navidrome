@@ -1,12 +1,13 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useSelector } from 'react-redux'
 import { Divider, makeStyles } from '@material-ui/core'
 import clsx from 'clsx'
 import { useTranslate, MenuItemLink, getResources } from 'react-admin'
 import ViewListIcon from '@material-ui/icons/ViewList'
 import AlbumIcon from '@material-ui/icons/Album'
-import SearchIcon from '@material-ui/icons/Search'
+import GetAppIcon from '@material-ui/icons/GetApp'
 import SubMenu from './SubMenu'
+import { httpClient } from '../dataProvider'
 import { humanize, pluralize } from 'inflection'
 import albumLists from '../album/albumLists'
 import PlaylistsSubMenu from './PlaylistsSubMenu'
@@ -53,6 +54,7 @@ const Menu = ({ dense = false }) => {
   const queue = useSelector((state) => state.player?.queue)
   const classes = useStyles({ addPadding: queue.length > 0 })
   const resources = useSelector(getResources)
+  const [showOnlineSearch, setShowOnlineSearch] = useState(false)
 
   // TODO State is not persisted in mobile when you close the sidebar menu. Move to redux?
   const [state, setState] = useState({
@@ -60,6 +62,31 @@ const Menu = ({ dense = false }) => {
     menuPlaylists: true,
     menuSharedPlaylists: true,
   })
+
+  useEffect(() => {
+    const checkOnlineSourceStatus = () => {
+      httpClient('/api/online/source/status')
+        .then(({ json }) => {
+          setShowOnlineSearch(Boolean(json?.hasEnabledSource))
+        })
+        .catch(() => {
+          setShowOnlineSearch(false)
+        })
+    }
+
+    checkOnlineSourceStatus()
+
+    const handleStatusChanged = () => {
+      checkOnlineSourceStatus()
+    }
+
+    const ONLINE_SOURCE_STATUS_CHANGED_EVENT = 'nd:online-source-status-changed'
+    window.addEventListener(ONLINE_SOURCE_STATUS_CHANGED_EVENT, handleStatusChanged)
+
+    return () => {
+      window.removeEventListener(ONLINE_SOURCE_STATUS_CHANGED_EVENT, handleStatusChanged)
+    }
+  }, [])
 
   const handleToggle = (menu) => {
     setState((state) => ({ ...state, [menu]: !state[menu] }))
@@ -114,6 +141,16 @@ const Menu = ({ dense = false }) => {
       })}
     >
       {open && <LibrarySelector />}
+      {showOnlineSearch && (
+        <MenuItemLink
+          to="/online/search"
+          activeClassName={classes.active}
+          primaryText={translate('menu.onlineSearch', { _: '在线搜索' })}
+          leftIcon={<GetAppIcon />}
+          sidebarIsOpen={open}
+          dense={dense}
+        />
+      )}
       <SubMenu
         handleToggle={() => handleToggle('menuAlbumList')}
         isOpen={state.menuAlbumList}
@@ -126,14 +163,7 @@ const Menu = ({ dense = false }) => {
           renderAlbumMenuItemLink(type, albumLists[type]),
         )}
       </SubMenu>
-      <MenuItemLink
-        to="/online/search"
-        activeClassName={classes.active}
-        primaryText={translate('menu.onlineSearch', { _: '在线搜索' })}
-        leftIcon={<SearchIcon />}
-        sidebarIsOpen={open}
-        dense={dense}
-      />
+
       {resources.filter(subItems(undefined)).map(renderResourceMenuItemLink)}
       {config.devSidebarPlaylists && open ? (
         <>
