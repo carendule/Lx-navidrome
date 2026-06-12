@@ -183,6 +183,8 @@ const DownloadList = ({
     onToggleTask,
 }) => {
     const classes = useStyles()
+    const taskOrderRef = React.useRef(new Map())
+    const nextOrderRef = React.useRef(1)
 
     const calculateTotalProgress = () => {
         if (!tasks || tasks.length === 0) return 0
@@ -190,25 +192,47 @@ const DownloadList = ({
         return Math.round(totalProgress / tasks.length)
     }
 
-    // Sort tasks: active tasks first (by reverse insertion order), then completed tasks
+    // Keep a stable insertion rank for each task ID so polling does not reshuffle items.
+    React.useEffect(() => {
+        if (!tasks || tasks.length === 0) {
+            taskOrderRef.current.clear()
+            nextOrderRef.current = 1
+            return
+        }
+
+        const visibleIDs = new Set(tasks.map((task) => task.id))
+        taskOrderRef.current.forEach((_, id) => {
+            if (!visibleIDs.has(id)) {
+                taskOrderRef.current.delete(id)
+            }
+        })
+
+        tasks.forEach((task) => {
+            if (!taskOrderRef.current.has(task.id)) {
+                taskOrderRef.current.set(task.id, nextOrderRef.current)
+                nextOrderRef.current += 1
+            }
+        })
+    }, [tasks])
+
+    // Sort tasks: active tasks first, and newest inserted first inside each group.
     const sortedTasks = React.useMemo(() => {
         if (!tasks || tasks.length === 0) return []
 
         const activeTasks = []
         const completedTasks = []
 
-        tasks.forEach((task, index) => {
+        tasks.forEach((task) => {
+            const stableOrder = taskOrderRef.current.get(task.id) || 0
             if (task.status === 'completed') {
-                completedTasks.push({ ...task, _index: index })
+                completedTasks.push({ ...task, _stableOrder: stableOrder })
             } else {
-                activeTasks.push({ ...task, _index: index })
+                activeTasks.push({ ...task, _stableOrder: stableOrder })
             }
         })
 
-        // Sort active tasks by reverse insertion order (newest first)
-        activeTasks.sort((a, b) => b._index - a._index)
-        // Sort completed tasks by reverse insertion order
-        completedTasks.sort((a, b) => b._index - a._index)
+        activeTasks.sort((a, b) => b._stableOrder - a._stableOrder)
+        completedTasks.sort((a, b) => b._stableOrder - a._stableOrder)
 
         return [...activeTasks, ...completedTasks]
     }, [tasks])

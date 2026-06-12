@@ -1195,6 +1195,7 @@ func resolveOnlineDownloadURL(ctx context.Context, songSource string, songInfo m
 	if err != nil {
 		return "", "", nil, err
 	}
+	sources = normalizeOnlineSourcesOrder(sources)
 
 	var attemptErrors []string
 	for _, source := range sources {

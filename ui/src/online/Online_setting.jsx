@@ -57,6 +57,12 @@ const useStyles = makeStyles((theme) => ({
         justifyContent: 'space-between',
         gap: theme.spacing(1),
     },
+    titleRow: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: theme.spacing(1),
+        minWidth: 0,
+    },
     left: {
         display: 'flex',
         alignItems: 'flex-start',
@@ -67,6 +73,18 @@ const useStyles = makeStyles((theme) => ({
     dragHandle: {
         color: theme.palette.text.disabled,
         marginTop: 2,
+        cursor: 'grab',
+        touchAction: 'none',
+    },
+    dragHandleDisabled: {
+        cursor: 'not-allowed',
+        opacity: 0.35,
+    },
+    cardDragging: {
+        opacity: 0.6,
+    },
+    cardDropTarget: {
+        borderColor: theme.palette.primary.main,
     },
     sourceTitle: {
         fontWeight: 600,
@@ -166,6 +184,15 @@ const OnlineSetting = () => {
     const [sources, setSources] = React.useState([])
     const [downloadPath, setDownloadPath] = React.useState('')
     const [savingDownloadPath, setSavingDownloadPath] = React.useState(false)
+    const [draggingID, setDraggingID] = React.useState('')
+    const [dragOverID, setDragOverID] = React.useState('')
+    const [touchDraggingID, setTouchDraggingID] = React.useState('')
+    const touchLongPressTimerRef = React.useRef(null)
+    const touchPointRef = React.useRef({ x: 0, y: 0 })
+    const draggingIDRef = React.useRef('')
+    const dragOverIDRef = React.useRef('')
+    const dragPlaceAfterRef = React.useRef(false)
+    const dragModeRef = React.useRef('')
     const uploadInputRef = React.useRef(null)
 
     const loadSources = React.useCallback(() => {
@@ -298,7 +325,7 @@ const OnlineSetting = () => {
                 if (!json) {
                     return
                 }
-                setSources((prev) => [json, ...prev.filter((item) => item.id !== json.id)])
+                setSources((prev) => [...prev.filter((item) => item.id !== json.id), json])
                 notifyOnlineSourceStatusChanged()
             } catch (e) {
                 // eslint-disable-next-line no-console
@@ -315,6 +342,192 @@ const OnlineSetting = () => {
         },
         [notify, notifyOnlineSourceStatusChanged],
     )
+
+    const displaySources = React.useMemo(() => {
+        const list = Array.isArray(sources) ? [...sources] : []
+        const enabled = list.filter((item) => item.enabled)
+        const disabled = list.filter((item) => !item.enabled)
+
+        enabled.sort((a, b) => {
+            const left = Number(a.enabledOrder) || Number.MAX_SAFE_INTEGER
+            const right = Number(b.enabledOrder) || Number.MAX_SAFE_INTEGER
+            if (left !== right) return left - right
+            return String(a.createdAt || '').localeCompare(String(b.createdAt || ''))
+        })
+
+        return [...enabled, ...disabled]
+    }, [sources])
+
+    const reorderEnabledSources = React.useCallback(
+        (dragID, targetID, placeAfter = false) => {
+            if (!dragID || !targetID || dragID === targetID) return
+
+            const enabledIDs = displaySources.filter((item) => item.enabled).map((item) => item.id)
+            const fromIndex = enabledIDs.indexOf(dragID)
+            if (fromIndex < 0) return
+
+            const nextIDs = [...enabledIDs]
+            const [moved] = nextIDs.splice(fromIndex, 1)
+            const targetIndex = nextIDs.indexOf(targetID)
+            if (targetIndex < 0) return
+            const insertIndex = placeAfter ? targetIndex + 1 : targetIndex
+            nextIDs.splice(Math.max(0, Math.min(nextIDs.length, insertIndex)), 0, moved)
+
+            const enabledMap = new Map(displaySources.filter((item) => item.enabled).map((item) => [item.id, item]))
+            const disabled = displaySources.filter((item) => !item.enabled)
+            const reorderedEnabled = nextIDs.map((id, idx) => ({
+                ...enabledMap.get(id),
+                enabledOrder: idx + 1,
+            }))
+            setSources([...reorderedEnabled, ...disabled])
+
+            httpClient('/api/online/source/reorder', {
+                method: 'POST',
+                body: JSON.stringify({ sourceIds: nextIDs }),
+                headers: new Headers({ 'Content-Type': 'application/json' }),
+            })
+                .then(() => {
+                    loadSources()
+                })
+                .catch(() => {
+                    loadSources()
+                    notify('排序保存失败', 'warning')
+                })
+        },
+        [displaySources, loadSources, notify],
+    )
+
+    const clearTouchLongPressTimer = React.useCallback(() => {
+        if (touchLongPressTimerRef.current) {
+            window.clearTimeout(touchLongPressTimerRef.current)
+            touchLongPressTimerRef.current = null
+        }
+    }, [])
+
+    const handleCardMouseEnter = React.useCallback((event, item) => {
+        if (!draggingIDRef.current || !item.enabled) return
+        dragOverIDRef.current = item.id
+        setDragOverID(item.id)
+    }, [])
+
+    const commitPointerDrag = React.useCallback(() => {
+        const dragID = draggingIDRef.current
+        const targetID = dragOverIDRef.current
+        if (dragID && targetID && dragID !== targetID) {
+            reorderEnabledSources(dragID, targetID, dragPlaceAfterRef.current)
+        }
+
+        draggingIDRef.current = ''
+        dragOverIDRef.current = ''
+        dragPlaceAfterRef.current = false
+        dragModeRef.current = ''
+        setDraggingID('')
+        setTouchDraggingID('')
+        setDragOverID('')
+    }, [reorderEnabledSources])
+
+    const handleMouseDragStart = React.useCallback((event, item) => {
+        if (!item.enabled) return
+        event.preventDefault()
+        draggingIDRef.current = item.id
+        dragOverIDRef.current = item.id
+        dragPlaceAfterRef.current = false
+        dragModeRef.current = 'mouse'
+        setDraggingID(item.id)
+        setDragOverID(item.id)
+    }, [])
+
+    const handleMouseMove = React.useCallback((event) => {
+        if (dragModeRef.current !== 'mouse' || !draggingIDRef.current) return
+        const element = document.elementFromPoint(event.clientX, event.clientY)
+        if (!element) return
+
+        let el = element
+        while (el && el !== document.body) {
+            const sid = el.getAttribute && el.getAttribute('data-source-id')
+            if (sid) {
+                if (el.getAttribute('data-enabled') === 'true') {
+                    dragOverIDRef.current = sid
+                    setDragOverID(sid)
+                    const rect = el.getBoundingClientRect()
+                    dragPlaceAfterRef.current = event.clientY > rect.top + rect.height / 2
+                }
+                break
+            }
+            el = el.parentElement
+        }
+    }, [])
+
+    const handleMouseUp = React.useCallback(() => {
+        if (dragModeRef.current !== 'mouse') return
+        commitPointerDrag()
+    }, [commitPointerDrag])
+
+    const handleTouchStart = React.useCallback((event, item) => {
+        if (!item.enabled) return
+        const touch = event.touches && event.touches[0]
+        if (!touch) return
+
+        touchPointRef.current = { x: touch.clientX, y: touch.clientY }
+        clearTouchLongPressTimer()
+        touchLongPressTimerRef.current = window.setTimeout(() => {
+            draggingIDRef.current = item.id
+            dragOverIDRef.current = item.id
+            dragPlaceAfterRef.current = false
+            dragModeRef.current = 'touch'
+            setDraggingID(item.id)
+            setTouchDraggingID(item.id)
+            setDragOverID(item.id)
+        }, 280)
+    }, [clearTouchLongPressTimer])
+
+    const handleTouchMove = React.useCallback((event) => {
+        const touch = event.touches && event.touches[0]
+        if (!touch) return
+
+        touchPointRef.current = { x: touch.clientX, y: touch.clientY }
+        if (!touchDraggingID) return
+        event.preventDefault()
+
+        const element = document.elementFromPoint(touch.clientX, touch.clientY)
+        if (element) {
+            let el = element
+            while (el && el !== document.body) {
+                const sid = el.getAttribute && el.getAttribute('data-source-id')
+                if (sid) {
+                    if (el.getAttribute('data-enabled') === 'true') {
+                        dragOverIDRef.current = sid
+                        setDragOverID(sid)
+                        const rect = el.getBoundingClientRect()
+                        dragPlaceAfterRef.current = touch.clientY > rect.top + rect.height / 2
+                    }
+                    break
+                }
+                el = el.parentElement
+            }
+        }
+    }, [touchDraggingID])
+
+    const handleTouchEnd = React.useCallback(() => {
+        clearTouchLongPressTimer()
+        if (dragModeRef.current === 'touch') {
+            commitPointerDrag()
+            return
+        }
+        setTouchDraggingID('')
+        setDragOverID('')
+    }, [clearTouchLongPressTimer, commitPointerDrag])
+
+    React.useEffect(() => {
+        window.addEventListener('mousemove', handleMouseMove)
+        window.addEventListener('mouseup', handleMouseUp)
+        return () => {
+            window.removeEventListener('mousemove', handleMouseMove)
+            window.removeEventListener('mouseup', handleMouseUp)
+        }
+    }, [handleMouseMove, handleMouseUp])
+
+    React.useEffect(() => () => clearTouchLongPressTimer(), [clearTouchLongPressTimer])
 
     const toDisplaySize = (size) => {
         const num = Number(size)
@@ -385,26 +598,38 @@ const OnlineSetting = () => {
                 </Button>
             </div>
 
-            {sources.map((item) => (
-                <Card key={item.id} className={classes.card}>
+            {displaySources.map((item) => (
+                <Card
+                    key={item.id}
+                    className={`${classes.card} ${draggingID === item.id || touchDraggingID === item.id ? classes.cardDragging : ''} ${dragOverID === item.id && (draggingID || touchDraggingID) ? classes.cardDropTarget : ''}`}
+                    data-source-id={item.id}
+                    data-enabled={item.enabled ? 'true' : 'false'}
+                    onMouseEnter={(event) => handleCardMouseEnter(event, item)}
+                    onTouchStart={(event) => handleTouchStart(event, item)}
+                    onTouchMove={handleTouchMove}
+                    onTouchEnd={handleTouchEnd}
+                    onTouchCancel={handleTouchEnd}
+                >
                     <CardContent>
                         <div className={classes.row}>
                             <div className={classes.left}>
-                                <MdDragIndicator className={classes.dragHandle} size={18} />
+                                <span
+                                    onMouseDown={(event) => handleMouseDragStart(event, item)}
+                                >
+                                    <MdDragIndicator className={`${classes.dragHandle} ${!item.enabled ? classes.dragHandleDisabled : ''}`} size={18} />
+                                </span>
                                 <Box minWidth={0}>
-                                    <div className={classes.row}>
+                                    <div className={classes.titleRow}>
                                         <Typography variant="subtitle1" className={classes.sourceTitle}>
                                             {item.name}
                                         </Typography>
-                                        <Box>
-                                            {item.enabled && (
-                                                <Chip
-                                                    size="small"
-                                                    label={translate('online.enabled', { _: '已启用' })}
-                                                    className={classes.statusEnabled}
-                                                />
-                                            )}
-                                        </Box>
+                                        {item.enabled && (
+                                            <Chip
+                                                size="small"
+                                                label={translate('online.enabled', { _: '已启用' })}
+                                                className={classes.statusEnabled}
+                                            />
+                                        )}
                                     </div>
 
                                     <div className={classes.sourceMeta}>

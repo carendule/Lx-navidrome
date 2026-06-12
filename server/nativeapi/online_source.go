@@ -33,6 +33,7 @@ type onlineSource struct {
 	SupportedSources []string `json:"supportedSources,omitempty"`
 	AllowUnsafeVM    bool     `json:"allowUnsafeVM,omitempty"`
 	Enabled          bool     `json:"enabled"`
+	EnabledOrder     int      `json:"enabledOrder,omitempty"`
 	Status           string   `json:"status,omitempty"`
 	SourceURL        string   `json:"sourceUrl,omitempty"`
 	CreatedAt        string   `json:"createdAt"`
@@ -138,13 +139,7 @@ func (api *Router) listOnlineSources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Keep enabled sources first, preserving relative order among same states.
-	sort.SliceStable(sources, func(i, j int) bool {
-		if sources[i].Enabled == sources[j].Enabled {
-			return false
-		}
-		return sources[i].Enabled && !sources[j].Enabled
-	})
+	sources = normalizeOnlineSourcesOrder(sources)
 
 	writeJSON(w, sources)
 }
@@ -292,17 +287,22 @@ func (api *Router) toggleOnlineSource(w http.ResponseWriter, r *http.Request) {
 		if sources[i].ID != id {
 			continue
 		}
+		now := time.Now().UTC().Format(time.RFC3339)
 		if req.Enabled == nil {
 			sources[i].Enabled = !sources[i].Enabled
 		} else {
 			sources[i].Enabled = *req.Enabled
 		}
-		sources[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		sources[i].UpdatedAt = now
 		if sources[i].Enabled {
 			sources[i].Status = "正常"
+			sources[i].EnabledOrder = maxEnabledOrder(sources) + 1
 		} else {
 			sources[i].Status = "已禁用"
+			sources[i].EnabledOrder = 0
 		}
+
+		sources = normalizeOnlineSourcesOrder(sources)
 
 		if err := saveOnlineSources(sources); err != nil {
 			http.Error(w, "Could not save online sources", http.StatusInternalServerError)
@@ -371,24 +371,32 @@ func (api *Router) reorderOnlineSources(w http.ResponseWriter, r *http.Request) 
 		byID[src.ID] = src
 	}
 
-	reordered := make([]onlineSource, 0, len(sources))
-	used := map[string]bool{}
-	for _, id := range req.SourceIDs {
+	enabledRank := map[string]int{}
+	for i, id := range req.SourceIDs {
 		src, ok := byID[id]
-		if !ok {
+		if !ok || !src.Enabled {
 			continue
 		}
-		reordered = append(reordered, src)
-		used[id] = true
-	}
-	for _, src := range sources {
-		if used[src.ID] {
-			continue
-		}
-		reordered = append(reordered, src)
+		enabledRank[id] = i + 1
 	}
 
-	if err := saveOnlineSources(reordered); err != nil {
+	nextRank := len(enabledRank) + 1
+	for i := range sources {
+		if !sources[i].Enabled {
+			sources[i].EnabledOrder = 0
+			continue
+		}
+		if rank, ok := enabledRank[sources[i].ID]; ok {
+			sources[i].EnabledOrder = rank
+			continue
+		}
+		sources[i].EnabledOrder = nextRank
+		nextRank++
+	}
+
+	sources = normalizeOnlineSourcesOrder(sources)
+
+	if err := saveOnlineSources(sources); err != nil {
 		http.Error(w, "Could not save online sources", http.StatusInternalServerError)
 		return
 	}
@@ -455,6 +463,7 @@ func createOnlineSource(filename, content, sourceURL string, allowUnsafeVM bool)
 		SupportedSources: supportedSources,
 		AllowUnsafeVM:    allowUnsafeVM,
 		Enabled:          false,
+		EnabledOrder:     0,
 		Status:           "已禁用",
 		SourceURL:        sourceURL,
 		CreatedAt:        now,
@@ -575,6 +584,65 @@ func saveOnlineSources(sources []onlineSource) error {
 		return err
 	}
 	return os.WriteFile(onlineMetaPath(), b, 0o600)
+}
+
+func maxEnabledOrder(sources []onlineSource) int {
+	maxOrder := 0
+	for _, src := range sources {
+		if src.Enabled && src.EnabledOrder > maxOrder {
+			maxOrder = src.EnabledOrder
+		}
+	}
+	return maxOrder
+}
+
+func normalizeOnlineSourcesOrder(sources []onlineSource) []onlineSource {
+	type indexedSource struct {
+		source onlineSource
+		index  int
+	}
+
+	enabled := make([]indexedSource, 0, len(sources))
+	disabled := make([]onlineSource, 0, len(sources))
+
+	for i, src := range sources {
+		if src.Enabled {
+			enabled = append(enabled, indexedSource{source: src, index: i})
+			continue
+		}
+		src.EnabledOrder = 0
+		disabled = append(disabled, src)
+	}
+
+	sort.SliceStable(enabled, func(i, j int) bool {
+		left := enabled[i]
+		right := enabled[j]
+
+		leftOrder := left.source.EnabledOrder
+		rightOrder := right.source.EnabledOrder
+
+		leftHasOrder := leftOrder > 0
+		rightHasOrder := rightOrder > 0
+
+		if leftHasOrder && rightHasOrder {
+			if leftOrder == rightOrder {
+				return left.index < right.index
+			}
+			return leftOrder < rightOrder
+		}
+		if leftHasOrder != rightHasOrder {
+			return leftHasOrder
+		}
+		return left.index < right.index
+	})
+
+	reordered := make([]onlineSource, 0, len(sources))
+	for i := range enabled {
+		enabled[i].source.EnabledOrder = i + 1
+		reordered = append(reordered, enabled[i].source)
+	}
+	reordered = append(reordered, disabled...)
+	return reordered
 }
 
 func generateSourceID(name, filename string, existing []onlineSource) string {
