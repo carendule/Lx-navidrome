@@ -163,13 +163,32 @@ const statusColor = {
     failed: 'secondary',
 }
 
+const taskStatusColorMap = {
+    queued: '#9c27b0',
+    resolving: '#ff9800',
+    downloading: '#2196f3',
+    completed: '#4caf50',
+    failed: '#f44336',
+}
+
 const DownloadList = ({
     open,
     onClose,
     tasks = defaultTasks,
     totalSpeed = '0 B/s',
+    totalProgress = 0,
+    onRetryAll,
+    onCancelAll,
+    onClearCompleted,
+    onToggleTask,
 }) => {
     const classes = useStyles()
+
+    const calculateTotalProgress = () => {
+        if (!tasks || tasks.length === 0) return 0
+        const totalProgress = tasks.reduce((sum, task) => sum + (task.progress || 0), 0)
+        return Math.round(totalProgress / tasks.length)
+    }
 
     return (
         <Fade in={open} timeout={180}>
@@ -188,15 +207,32 @@ const DownloadList = ({
                     </Box>
 
                     <Box className={classes.summary}>
-                        <Typography className={classes.summaryText}>总进度: 100%</Typography>
+                        <Typography className={classes.summaryText}>
+                            总进度: {calculateTotalProgress()}%
+                        </Typography>
                         <Box className={classes.actionRow}>
-                            <Button variant="outlined" size="small" className={classes.actionBtn}>
+                            <Button 
+                                variant="outlined" 
+                                size="small" 
+                                className={classes.actionBtn}
+                                onClick={onRetryAll}
+                            >
                                 全部重试
                             </Button>
-                            <Button variant="outlined" size="small" className={classes.actionBtn}>
+                            <Button 
+                                variant="outlined" 
+                                size="small" 
+                                className={classes.actionBtn}
+                                onClick={onCancelAll}
+                            >
                                 全部取消
                             </Button>
-                            <Button variant="outlined" size="small" className={classes.actionBtn}>
+                            <Button 
+                                variant="outlined" 
+                                size="small" 
+                                className={classes.actionBtn}
+                                onClick={onClearCompleted}
+                            >
                                 清空已完成
                             </Button>
                         </Box>
@@ -210,13 +246,21 @@ const DownloadList = ({
                         )}
 
                         {tasks.map((task) => (
-                            <Box key={task.id} className={classes.taskCard}>
+                            <Box 
+                                key={task.id} 
+                                className={classes.taskCard}
+                                onClick={() => onToggleTask && onToggleTask(task.id)}
+                                style={{ cursor: 'pointer' }}
+                            >
                                 <Box className={classes.taskHead}>
                                     <Typography className={classes.taskName}>{task.title}</Typography>
                                     <Chip
                                         size="small"
                                         label={statusLabel[task.status] || '未知'}
-                                        color={statusColor[task.status] || 'default'}
+                                        style={{
+                                            backgroundColor: taskStatusColorMap[task.status] || '#999',
+                                            color: 'white',
+                                        }}
                                     />
                                 </Box>
 
@@ -224,15 +268,13 @@ const DownloadList = ({
                                     {task.source} · {task.quality} · {task.artist}
                                 </Typography>
 
-                                {task.status !== 'completed' && (
-                                    <Box className={classes.progressWrap}>
-                                        <LinearProgress
-                                            className={classes.progress}
-                                            variant="determinate"
-                                            value={Math.max(0, Math.min(100, task.progress || 0))}
-                                        />
-                                    </Box>
-                                )}
+                                <Box className={classes.progressWrap}>
+                                    <LinearProgress
+                                        className={classes.progress}
+                                        variant="determinate"
+                                        value={Math.max(0, Math.min(100, task.progress || 0))}
+                                    />
+                                </Box>
                             </Box>
                         ))}
                     </Box>
@@ -243,7 +285,11 @@ const DownloadList = ({
 }
 
 DownloadList.propTypes = {
+    onCancelAll: PropTypes.func,
+    onClearCompleted: PropTypes.func,
     onClose: PropTypes.func,
+    onRetryAll: PropTypes.func,
+    onToggleTask: PropTypes.func,
     open: PropTypes.bool,
     tasks: PropTypes.arrayOf(
         PropTypes.shape({
@@ -256,13 +302,19 @@ DownloadList.propTypes = {
             title: PropTypes.string,
         }),
     ),
+    totalProgress: PropTypes.number,
     totalSpeed: PropTypes.string,
 }
 
 DownloadList.defaultProps = {
+    onCancelAll: () => { },
+    onClearCompleted: () => { },
     onClose: () => { },
+    onRetryAll: () => { },
+    onToggleTask: () => { },
     open: false,
     tasks: defaultTasks,
+    totalProgress: 0,
     totalSpeed: '0 B/s',
 }
 

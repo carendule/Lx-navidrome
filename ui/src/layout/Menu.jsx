@@ -5,7 +5,7 @@ import clsx from 'clsx'
 import { useTranslate, MenuItemLink, getResources } from 'react-admin'
 import ViewListIcon from '@material-ui/icons/ViewList'
 import AlbumIcon from '@material-ui/icons/Album'
-import GetAppIcon from '@material-ui/icons/GetApp'
+import SearchIcon from '@material-ui/icons/Search'
 import SubMenu from './SubMenu'
 import { httpClient } from '../dataProvider'
 import { humanize, pluralize } from 'inflection'
@@ -146,7 +146,7 @@ const Menu = ({ dense = false }) => {
           to="/online/search"
           activeClassName={classes.active}
           primaryText={translate('menu.onlineSearch', { _: '在线搜索' })}
-          leftIcon={<GetAppIcon />}
+          leftIcon={<SearchIcon />}
           sidebarIsOpen={open}
           dense={dense}
         />
