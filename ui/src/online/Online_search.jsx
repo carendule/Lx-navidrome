@@ -29,6 +29,7 @@ import {
   httpClient,
 } from '../dataProvider'
 import { baseUrl } from '../utils'
+import { fetchOnlineNameTemplate } from './online_source_settings_api'
 
 const ONLINE_DOWNLOAD_TASK_CHANGED_EVENT = 'nd:online-download-task-changed'
 
@@ -808,6 +809,12 @@ const OnlineSearch = () => {
     setBrowserDownloadStatus('resolving')
     setBrowserDownloadSourceName('')
     try {
+      // Pull the user-configured chip template from settings so the
+      // server can name the downloaded file with the same order
+      // they see in the settings panel. Fetching right before
+      // starting the request means a chip reorder in another tab
+      // is picked up on the next download without a refresh.
+      const nameTemplate = await fetchOnlineNameTemplate()
       const startResponse = await fetch(
         baseUrl('/api/online/download/browser/start'),
         {
@@ -816,6 +823,7 @@ const OnlineSearch = () => {
           body: JSON.stringify({
             songInfo: selectedItem,
             quality: selectedQuality,
+            nameTemplate,
           }),
         },
       )
@@ -927,6 +935,11 @@ const OnlineSearch = () => {
     setServerDownloadLoading(true)
     setServerDownloadStatus('resolving')
     try {
+      // Persist the chip order alongside the request so the
+      // server can use it when building the file path on disk.
+      // Stored on the task itself, so even a mid-download
+      // settings change doesn't break the in-flight task.
+      const nameTemplate = await fetchOnlineNameTemplate()
       const response = await fetch(
         baseUrl('/api/online/download/server/start'),
         {
@@ -935,6 +948,7 @@ const OnlineSearch = () => {
           body: JSON.stringify({
             songInfo: selectedItem,
             quality: selectedQuality,
+            nameTemplate,
           }),
         },
       )

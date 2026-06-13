@@ -30,6 +30,14 @@ const onlineDownloadScriptRetries = 3
 type onlineBrowserDownloadRequest struct {
 	SongInfo map[string]any `json:"songInfo"`
 	Quality  string         `json:"quality"`
+	// NameTemplate is the ordered list of chip tokens the user picked
+	// in the "下载命名设置" UI (e.g. ["歌名", "音质", "歌手"]). It is
+	// persisted to settings.json, so the frontend reads it back on
+	// mount and sends it with every download request. Empty list
+	// means "fall back to the default name" — the file name builder
+	// will substitute [歌名, 歌手] in that case so the filename
+	// always has at least a name + singer component.
+	NameTemplate []string `json:"nameTemplate,omitempty"`
 }
 
 type onlineBrowserDownloadStartResponse struct {
@@ -99,9 +107,14 @@ type onlineDownloadTask struct {
 	// info.songmid / info.id construct broken URLs and the download
 	// fails with 404. Browser-mode tasks keep this nil because
 	// runOnlineDownloadTask receives the normalized map directly.
-	SongInfo  map[string]any
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	SongInfo map[string]any
+	// NameTemplate is the user-configured chip order from the
+	// "下载命名设置" panel. Stored on the task so async and fallback
+	// code paths can build the file name consistently even if the
+	// global settings change mid-download.
+	NameTemplate []string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 type onlineServerDownloadTaskView struct {
@@ -598,7 +611,7 @@ func (api *Router) onlineBrowserDownloadStart(w http.ResponseWriter, r *http.Req
 		quality = bestOnlineDownloadQuality(req.SongInfo)
 	}
 
-	taskID := createOnlineDownloadTask()
+	taskID := createOnlineDownloadTask(req.NameTemplate)
 	normalized := normalizeOnlineDownloadSongInfo(req.SongInfo)
 	go runOnlineDownloadTask(taskID, songSource, normalized, quality)
 
@@ -702,7 +715,7 @@ func (api *Router) onlineBrowserDownload(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("X-Online-Resolver-Source", sourceName)
 	w.Header().Set("Access-Control-Expose-Headers", "X-Online-Resolved-URL, X-Online-Resolver-Source, Content-Disposition")
 
-	fileName := onlineDownloadFileName(normalized, quality, resolvedURL)
+	fileName := onlineDownloadFileName(normalized, quality, req.NameTemplate, resolvedURL)
 	if err := proxyOnlineDownload(ctx, w, r, resolvedURL, fileName, resolvedHeaders); err != nil {
 		log.Warn(r.Context(), "Online browser download proxy failed", "source", songSource, "resolver", sourceName, "url", resolvedURL, "err", err)
 		if w.Header().Get("Content-Type") == "" {
@@ -744,7 +757,7 @@ func (api *Router) onlineServerDownloadStart(w http.ResponseWriter, r *http.Requ
 	}
 
 	normalized := normalizeOnlineDownloadSongInfo(req.SongInfo)
-	taskID := createOnlineServerDownloadTask(normalized, songSource, quality, downloadDir)
+	taskID := createOnlineServerDownloadTask(normalized, songSource, quality, downloadDir, req.NameTemplate)
 	go runOnlineServerDownloadTask(taskID) //nolint:gosec
 
 	w.Header().Set("Content-Type", "application/json")
@@ -865,6 +878,7 @@ func createOnlineServerDownloadTask(
 	source string,
 	quality string,
 	downloadDir string,
+	nameTemplate []string,
 ) string {
 	now := time.Now()
 	buf := make([]byte, 8)
@@ -885,18 +899,19 @@ func createOnlineServerDownloadTask(
 	onlineDownloadTasks.Lock()
 	_ = cleanupExpiredOnlineDownloadTasksLocked(now)
 	onlineDownloadTasks.items[id] = &onlineDownloadTask{
-		ID:          id,
-		Mode:        "server",
-		Title:       title,
-		Artist:      artist,
-		Source:      source,
-		Quality:     quality,
-		Status:      "queued",
-		Progress:    0,
-		DownloadDir: downloadDir,
-		SongInfo:    songInfo,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:           id,
+		Mode:         "server",
+		Title:        title,
+		Artist:       artist,
+		Source:       source,
+		Quality:      quality,
+		Status:       "queued",
+		Progress:     0,
+		DownloadDir:  downloadDir,
+		SongInfo:     songInfo,
+		NameTemplate: append([]string{}, nameTemplate...),
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 	onlineDownloadTasks.Unlock()
 	// Notify SSE subscribers after the write lock is released so
@@ -1016,7 +1031,7 @@ func runOnlineServerDownloadTask(taskID string) {
 
 		// Resolve succeeded: build the on-disk file paths for this
 		// attempt, populate the task, and stream.
-		fileName := onlineDownloadFileName(normalized, quality, resolvedURL)
+		fileName := onlineDownloadFileName(normalized, quality, task.NameTemplate, resolvedURL)
 		if !strings.Contains(fileName, ".") {
 			fileName += ".mp3"
 		}
@@ -1888,37 +1903,127 @@ func bestOnlineDownloadQuality(songInfo map[string]any) string {
 	return "128k"
 }
 
-func onlineDownloadFileName(songInfo map[string]any, quality string, resolvedURL string) string {
-	name := stringValue(songInfo["name"])
-	if name == "" {
-		name = "download"
+// resolveNameTemplateToken returns the song-info value the user wants
+// for the given chip token, or "" if the token is unknown or the
+// song info doesn't carry that field. The mapping is:
+//
+//	歌名   → songInfo["name"]
+//	歌手   → songInfo["singer"]
+//	专辑   → songInfo["albumName"]
+//	来源   → sourceLabel(songInfo["source"])  (wy→网易, etc.)
+//	音质   → the explicit quality argument
+func resolveNameTemplateToken(token string, songInfo map[string]any, quality string) string {
+	switch token {
+	case "歌名":
+		return stringValue(songInfo["name"])
+	case "歌手":
+		return stringValue(songInfo["singer"])
+	case "专辑":
+		return stringValue(songInfo["albumName"])
+	case "来源":
+		return sourceLabel(stringValue(songInfo["source"]))
+	case "音质":
+		return quality
+	default:
+		return ""
 	}
-	singer := stringValue(songInfo["singer"])
-	base := name
-	if singer != "" {
-		base = singer + " - " + name
+}
+
+// sourceLabel maps a song-info source code (wy/tx/kg/kw/mg) to the
+// short label users see in the UI. Falls back to the raw code when
+// the source is one we don't recognize (e.g. a custom JS source).
+func sourceLabel(source string) string {
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "wy":
+		return "网易"
+	case "tx":
+		return "QQ"
+	case "kg":
+		return "酷狗"
+	case "kw":
+		return "酷我"
+	case "mg":
+		return "咪咕"
 	}
-	base = sanitizeOnlineFileName(base)
-	if quality != "" {
-		base += " [" + sanitizeOnlineFileName(quality) + "]"
+	return source
+}
+
+// onlineDownloadFileName composes the on-disk file name for a
+// downloaded song. The user-configurable `nameTemplate` controls the
+// order of the parts (e.g. [歌名, 音质, 歌手] → "海屿你-320k-马也_Crabbit"),
+// separated by '-'. Tokens whose value is missing are silently
+// dropped so the filename never has dangling separators. An empty
+// or invalid template falls back to the default [歌名, 歌手] order.
+//
+// The file extension is taken from the resolved URL's path (or
+// Content-Type detection downstream) and is NOT part of the
+// template — that lets the user keep the same nameTemplate across
+// different qualities / sources without leaking the bitrate info
+// into the extension.
+func onlineDownloadFileName(songInfo map[string]any, quality string, nameTemplate []string, resolvedURL string) string {
+	template := sanitizeNameTemplate(nameTemplate)
+	if len(template) == 0 {
+		template = append([]string{}, defaultOnlineNameTemplate...)
 	}
-	// Parse the URL to extract only the path component before getting the extension;
-	// path.Ext on a raw URL string would include the query string in the extension.
+
+	parts := make([]string, 0, len(template))
+	for _, token := range template {
+		value := resolveNameTemplateToken(token, songInfo, quality)
+		if value == "" {
+			continue
+		}
+		parts = append(parts, sanitizeOnlineFileName(value))
+	}
+	if len(parts) == 0 {
+		// Last-ditch fallback: at least give the file a name so it
+		// doesn't end up as ".mp3".
+		parts = append(parts, sanitizeOnlineFileName(stringValue(songInfo["name"])))
+		if parts[0] == "" {
+			parts[0] = "download"
+		}
+	}
+	base := strings.Join(parts, "-")
+
+	// Parse the URL to extract only the path component before
+	// getting the extension; path.Ext on a raw URL string would
+	// include the query string in the extension.
 	urlExt := ""
 	if parsed, err := url.Parse(resolvedURL); err == nil {
 		urlExt = path.Ext(parsed.Path)
 	}
 	ext := strings.ToLower(strings.TrimPrefix(urlExt, "."))
-	// Only accept well-known audio/container extensions to avoid leaking API path segments.
+	// Only accept well-known audio/container extensions to avoid
+	// leaking API path segments.
 	knownExts := map[string]bool{"mp3": true, "flac": true, "ape": true, "m4a": true, "aac": true, "ogg": true, "wav": true, "wma": true, "opus": true}
 	if !knownExts[ext] {
-		ext = ""
-	}
-	if ext == "" {
-		// Leave extension-less; proxyOnlineDownload will add it from Content-Type.
+		// Leave extension-less; fetchOnlineDownloadToTempFile /
+		// downloadOnlineServerTaskToPath will add it from Content-Type.
 		return base
 	}
 	return base + "." + ext
+}
+
+// sanitizeNameTemplate returns the input template with unknown
+// tokens filtered out, duplicates removed, and the original order
+// preserved. It mirrors sanitizeOnlineNameTemplate in online_source.go
+// (frontend uses the same token set) so a server task built from a
+// frontend request can't accidentally include garbage tokens that
+// would make the filename look weird.
+func sanitizeNameTemplate(in []string) []string {
+	allowed := map[string]bool{
+		"歌名": true, "歌手": true, "专辑": true, "来源": true, "音质": true,
+	}
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, raw := range in {
+		token := strings.TrimSpace(raw)
+		if !allowed[token] || seen[token] {
+			continue
+		}
+		seen[token] = true
+		out = append(out, token)
+	}
+	return out
 }
 
 func sanitizeOnlineFileName(name string) string {
@@ -1952,7 +2057,7 @@ func proxyOnlineDownload(ctx context.Context, w http.ResponseWriter, _ *http.Req
 	return err
 }
 
-func createOnlineDownloadTask() string {
+func createOnlineDownloadTask(nameTemplate []string) string {
 	now := time.Now()
 	buf := make([]byte, 8)
 	if _, err := rand.Read(buf); err != nil {
@@ -1963,12 +2068,13 @@ func createOnlineDownloadTask() string {
 	onlineDownloadTasks.Lock()
 	_ = cleanupExpiredOnlineDownloadTasksLocked(now)
 	onlineDownloadTasks.items[id] = &onlineDownloadTask{
-		ID:        id,
-		Mode:      "browser",
-		Status:    "queued",
-		Progress:  0,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:           id,
+		Mode:         "browser",
+		Status:       "queued",
+		Progress:     0,
+		NameTemplate: append([]string{}, nameTemplate...),
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 	onlineDownloadTasks.Unlock()
 	broadcastDownloadTaskChange()
@@ -2093,7 +2199,15 @@ func runOnlineDownloadTask(taskID string, songSource string, normalized map[stri
 			continue
 		}
 
-		fileName := onlineDownloadFileName(normalized, quality, resolvedURL)
+		// Re-read the task here so the file name uses the *current*
+		// chip template — it may have been updated mid-download if the
+		// user reordered chips in the settings panel between resolves.
+		var fileName string
+		if cur, ok := getOnlineDownloadTaskPointer(taskID); ok {
+			fileName = onlineDownloadFileName(normalized, quality, cur.NameTemplate, resolvedURL)
+		} else {
+			fileName = onlineDownloadFileName(normalized, quality, nil, resolvedURL)
+		}
 		updateOnlineDownloadTask(taskID, func(task *onlineDownloadTask) {
 			task.Status = "downloading"
 			task.Progress = 0

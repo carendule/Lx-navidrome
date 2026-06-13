@@ -152,7 +152,7 @@ func TestCreateOnlineServerDownloadTaskDoesNotResolveYet(t *testing.T) {
 	}
 	downloadDir := t.TempDir()
 
-	taskID := createOnlineServerDownloadTask(songInfo, "tx", "128k", downloadDir)
+	taskID := createOnlineServerDownloadTask(songInfo, "tx", "128k", downloadDir, []string{"歌名", "歌手"})
 	defer func() {
 		onlineDownloadTasks.Lock()
 		delete(onlineDownloadTasks.items, taskID)
@@ -342,7 +342,7 @@ func TestCreateOnlineServerDownloadTaskPreservesSongInfo(t *testing.T) {
 	}
 	downloadDir := t.TempDir()
 
-	taskID := createOnlineServerDownloadTask(songInfo, "wy", "128k", downloadDir)
+	taskID := createOnlineServerDownloadTask(songInfo, "wy", "128k", downloadDir, []string{"歌名", "歌手"})
 	defer func() {
 		onlineDownloadTasks.Lock()
 		delete(onlineDownloadTasks.items, taskID)

@@ -79,7 +79,35 @@ type onlineSourceReorderRequest struct {
 }
 
 type onlineSourceSettings struct {
-	DownloadPath string `json:"downloadPath"`
+	DownloadPath string   `json:"downloadPath"`
+	NameTemplate []string `json:"nameTemplate,omitempty"`
+}
+
+// defaultOnlineNameTemplate is the default value for
+// onlineSourceSettings.NameTemplate. It is applied whenever the
+// settings file is missing, empty, or pre-dates the field. Keep in
+// sync with Online_setting.jsx NAME_TEMPLATE_DEFAULT.
+var defaultOnlineNameTemplate = []string{"歌名", "歌手"}
+
+// sanitizeOnlineNameTemplate filters an incoming NameTemplate slice
+// down to the allowed token set, de-duplicates, and falls back to the
+// default if the result is empty.
+func sanitizeOnlineNameTemplate(in []string) []string {
+	allowed := map[string]bool{"歌名": true, "歌手": true, "专辑": true, "来源": true, "音质": true}
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, raw := range in {
+		token := strings.TrimSpace(raw)
+		if !allowed[token] || seen[token] {
+			continue
+		}
+		seen[token] = true
+		out = append(out, token)
+	}
+	if len(out) == 0 {
+		return append([]string{}, defaultOnlineNameTemplate...)
+	}
+	return out
 }
 
 func (api *Router) addOnlineSourceRoute(r chi.Router) {
@@ -170,6 +198,7 @@ func (api *Router) saveOnlineSourceSettings(w http.ResponseWriter, r *http.Reque
 
 	settings := onlineSourceSettings{
 		DownloadPath: strings.TrimSpace(req.DownloadPath),
+		NameTemplate: sanitizeOnlineNameTemplate(req.NameTemplate),
 	}
 	if settings.DownloadPath == "" {
 		settings.DownloadPath = defaultOnlineDownloadPath()
@@ -515,7 +544,10 @@ func loadOnlineSourceSettings() (onlineSourceSettings, error) {
 		return onlineSourceSettings{}, err
 	}
 
-	settings := onlineSourceSettings{DownloadPath: defaultOnlineDownloadPath()}
+	settings := onlineSourceSettings{
+		DownloadPath: defaultOnlineDownloadPath(),
+		NameTemplate: append([]string{}, defaultOnlineNameTemplate...),
+	}
 	path := onlineSettingsPath()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return settings, nil
@@ -535,6 +567,7 @@ func loadOnlineSourceSettings() (onlineSourceSettings, error) {
 	if settings.DownloadPath == "" {
 		settings.DownloadPath = defaultOnlineDownloadPath()
 	}
+	settings.NameTemplate = sanitizeOnlineNameTemplate(settings.NameTemplate)
 	return settings, nil
 }
 

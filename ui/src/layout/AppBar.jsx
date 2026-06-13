@@ -342,7 +342,7 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
               >
                 <Badge
                   classes={{ root: classes.downloadBadge }}
-                  overlap="circle"
+                  overlap="circular"
                   anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
                   badgeContent={
                     downloadTaskState.activeCount > 0

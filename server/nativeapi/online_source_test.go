@@ -230,3 +230,91 @@ func TestValidateOnlineSourceScript(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadOnlineSourceSettingsDefaultsNameTemplate(t *testing.T) {
+	oldDataFolder := conf.Server.DataFolder
+	oldMusicFolder := conf.Server.MusicFolder
+	tmpDir := t.TempDir()
+	conf.Server.DataFolder = conf.NewDir(tmpDir)
+	conf.Server.MusicFolder = "/music/default"
+	defer func() {
+		conf.Server.DataFolder = oldDataFolder
+		conf.Server.MusicFolder = oldMusicFolder
+	}()
+
+	settings, err := loadOnlineSourceSettings()
+	if err != nil {
+		t.Fatalf("loadOnlineSourceSettings returned error: %v", err)
+	}
+	want := []string{"歌名", "歌手"}
+	if len(settings.NameTemplate) != len(want) {
+		t.Fatalf("unexpected default NameTemplate length: got %d want %d", len(settings.NameTemplate), len(want))
+	}
+	for i, v := range want {
+		if settings.NameTemplate[i] != v {
+			t.Fatalf("unexpected default NameTemplate[%d]: got %q want %q", i, settings.NameTemplate[i], v)
+		}
+	}
+}
+
+func TestSaveOnlineSourceSettingsPersistsNameTemplate(t *testing.T) {
+	oldDataFolder := conf.Server.DataFolder
+	oldMusicFolder := conf.Server.MusicFolder
+	tmpDir := t.TempDir()
+	conf.Server.DataFolder = conf.NewDir(tmpDir)
+	conf.Server.MusicFolder = "/music/default"
+	defer func() {
+		conf.Server.DataFolder = oldDataFolder
+		conf.Server.MusicFolder = oldMusicFolder
+	}()
+
+	want := []string{"歌名", "歌手", "专辑"}
+	if err := saveOnlineSourceSettings(onlineSourceSettings{
+		DownloadPath: filepath.Join(tmpDir, "downloads"),
+		NameTemplate: want,
+	}); err != nil {
+		t.Fatalf("saveOnlineSourceSettings returned error: %v", err)
+	}
+
+	settings, err := loadOnlineSourceSettings()
+	if err != nil {
+		t.Fatalf("loadOnlineSourceSettings returned error: %v", err)
+	}
+	if len(settings.NameTemplate) != len(want) {
+		t.Fatalf("unexpected persisted NameTemplate length: got %d want %d", len(settings.NameTemplate), len(want))
+	}
+	for i, v := range want {
+		if settings.NameTemplate[i] != v {
+			t.Fatalf("unexpected persisted NameTemplate[%d]: got %q want %q", i, settings.NameTemplate[i], v)
+		}
+	}
+}
+
+func TestSanitizeOnlineNameTemplate(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"nil", nil, []string{"歌名", "歌手"}},
+		{"empty", []string{}, []string{"歌名", "歌手"}},
+		{"only-invalid", []string{"foo", "bar"}, []string{"歌名", "歌手"}},
+		{"dedupe", []string{"歌名", "歌名", "歌手"}, []string{"歌名", "歌手"}},
+		{"reorder-not-allowed", []string{"歌手", "歌名"}, []string{"歌手", "歌名"}},
+		{"trim", []string{" 歌名 ", "  歌手"}, []string{"歌名", "歌手"}},
+		{"all-five", []string{"歌名", "歌手", "专辑", "来源", "音质"}, []string{"歌名", "歌手", "专辑", "来源", "音质"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := sanitizeOnlineNameTemplate(c.in)
+			if len(got) != len(c.want) {
+				t.Fatalf("length mismatch: got %v want %v", got, c.want)
+			}
+			for i, v := range c.want {
+				if got[i] != v {
+					t.Fatalf("index %d: got %q want %q", i, got[i], v)
+				}
+			}
+		})
+	}
+}
