@@ -6,7 +6,12 @@ import OnlineSearch from './online/Online_search'
 
 const routes = [
   <Route exact path="/personal" render={() => <Personal />} key={'personal'} />,
-  <Route exact path="/online" render={() => <OnlineSetting />} key={'online'} />,
+  <Route
+    exact
+    path="/online"
+    render={() => <OnlineSetting />}
+    key={'online'}
+  />,
   <Route
     exact
     path="/online/search"

@@ -42,9 +42,9 @@ const translatedResourceName = (resource, translate) =>
     _:
       resource.options && resource.options.label
         ? translate(resource.options.label, {
-          smart_count: 2,
-          _: resource.options.label,
-        })
+            smart_count: 2,
+            _: resource.options.label,
+          })
         : humanize(pluralize(resource.name)),
   })
 
@@ -81,10 +81,16 @@ const Menu = ({ dense = false }) => {
     }
 
     const ONLINE_SOURCE_STATUS_CHANGED_EVENT = 'nd:online-source-status-changed'
-    window.addEventListener(ONLINE_SOURCE_STATUS_CHANGED_EVENT, handleStatusChanged)
+    window.addEventListener(
+      ONLINE_SOURCE_STATUS_CHANGED_EVENT,
+      handleStatusChanged,
+    )
 
     return () => {
-      window.removeEventListener(ONLINE_SOURCE_STATUS_CHANGED_EVENT, handleStatusChanged)
+      window.removeEventListener(
+        ONLINE_SOURCE_STATUS_CHANGED_EVENT,
+        handleStatusChanged,
+      )
     }
   }, [])
 

@@ -138,25 +138,28 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
       })
   }, [])
 
-  const refreshDownloadTasks = useCallback((activeRef) => {
-    if (!showOnlineSearch) {
-      setDownloadTaskState(emptyTaskState)
-      return
-    }
-    httpClient('/api/online/download/tasks')
-      .then(({ json }) => {
-        if (activeRef && !activeRef.current) return
-        setDownloadTaskState({
-          tasks: Array.isArray(json?.tasks) ? json.tasks : [],
-          activeCount: Number(json?.activeCount) || 0,
-          totalSpeedText: String(json?.totalSpeedText || '0 B/s'),
-          totalProgress: Number(json?.totalProgress) || 0,
+  const refreshDownloadTasks = useCallback(
+    (activeRef) => {
+      if (!showOnlineSearch) {
+        setDownloadTaskState(emptyTaskState)
+        return
+      }
+      httpClient('/api/online/download/tasks')
+        .then(({ json }) => {
+          if (activeRef && !activeRef.current) return
+          setDownloadTaskState({
+            tasks: Array.isArray(json?.tasks) ? json.tasks : [],
+            activeCount: Number(json?.activeCount) || 0,
+            totalSpeedText: String(json?.totalSpeedText || '0 B/s'),
+            totalProgress: Number(json?.totalProgress) || 0,
+          })
         })
-      })
-      .catch(() => {
-        if (activeRef && !activeRef.current) return
-      })
-  }, [showOnlineSearch])
+        .catch(() => {
+          if (activeRef && !activeRef.current) return
+        })
+    },
+    [showOnlineSearch],
+  )
 
   useEffect(() => {
     const activeRef = { current: true }
@@ -167,7 +170,10 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
       refreshOnlineSearchVisibility(activeRef)
     }
 
-    window.addEventListener(ONLINE_SOURCE_STATUS_CHANGED_EVENT, handleStatusChanged)
+    window.addEventListener(
+      ONLINE_SOURCE_STATUS_CHANGED_EVENT,
+      handleStatusChanged,
+    )
 
     return () => {
       activeRef.current = false
@@ -179,7 +185,7 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
   }, [refreshOnlineSearchVisibility])
 
   useEffect(() => {
-    if (!showOnlineSearch) return () => { }
+    if (!showOnlineSearch) return () => {}
 
     const activeRef = { current: true }
     refreshDownloadTasks(activeRef)
@@ -209,26 +215,35 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
     const handleTaskChanged = () => {
       refreshDownloadTasks(activeRef)
     }
-    window.addEventListener(ONLINE_DOWNLOAD_TASK_CHANGED_EVENT, handleTaskChanged)
+    window.addEventListener(
+      ONLINE_DOWNLOAD_TASK_CHANGED_EVENT,
+      handleTaskChanged,
+    )
 
     return () => {
       activeRef.current = false
       eventSource.removeEventListener('tasks-changed', handleStreamChange)
       eventSource.close()
-      window.removeEventListener(ONLINE_DOWNLOAD_TASK_CHANGED_EVENT, handleTaskChanged)
+      window.removeEventListener(
+        ONLINE_DOWNLOAD_TASK_CHANGED_EVENT,
+        handleTaskChanged,
+      )
     }
   }, [showOnlineSearch, refreshDownloadTasks])
 
-  const postTaskAction = useCallback((url) => {
-    httpClient(url, {
-      method: 'POST',
-      body: JSON.stringify({}),
-      headers: new Headers({ 'Content-Type': 'application/json' }),
-    }).finally(() => {
-      refreshDownloadTasks()
-      window.dispatchEvent(new Event(ONLINE_DOWNLOAD_TASK_CHANGED_EVENT))
-    })
-  }, [refreshDownloadTasks])
+  const postTaskAction = useCallback(
+    (url) => {
+      httpClient(url, {
+        method: 'POST',
+        body: JSON.stringify({}),
+        headers: new Headers({ 'Content-Type': 'application/json' }),
+      }).finally(() => {
+        refreshDownloadTasks()
+        window.dispatchEvent(new Event(ONLINE_DOWNLOAD_TASK_CHANGED_EVENT))
+      })
+    },
+    [refreshDownloadTasks],
+  )
 
   const handleToggleDownloadList = () => {
     setDownloadListOpen((prev) => !prev)
@@ -254,10 +269,15 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
     postTaskAction('/api/online/download/tasks/clear-failed')
   }, [postTaskAction])
 
-  const handleToggleTask = useCallback((taskID) => {
-    if (!taskID) return
-    postTaskAction(`/api/online/download/task/${encodeURIComponent(taskID)}/toggle`)
-  }, [postTaskAction])
+  const handleToggleTask = useCallback(
+    (taskID) => {
+      if (!taskID) return
+      postTaskAction(
+        `/api/online/download/task/${encodeURIComponent(taskID)}/toggle`,
+      )
+    },
+    [postTaskAction],
+  )
 
   const resourceDefinition = (resourceName) =>
     resources.find((r) => r?.name === resourceName)
@@ -324,7 +344,11 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
                   classes={{ root: classes.downloadBadge }}
                   overlap="circle"
                   anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-                  badgeContent={downloadTaskState.activeCount > 0 ? downloadTaskState.activeCount : null}
+                  badgeContent={
+                    downloadTaskState.activeCount > 0
+                      ? downloadTaskState.activeCount
+                      : null
+                  }
                 >
                   <GetAppIcon style={{ color: 'white' }} />
                 </Badge>
@@ -344,7 +368,9 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
             className={classes.root}
             activeClassName={classes.active}
             to="/online"
-            primaryText={translate('menu.onlineSettings', { _: 'Online Settings' })}
+            primaryText={translate('menu.onlineSettings', {
+              _: 'Online Settings',
+            })}
             leftIcon={<MdPublic size={24} />}
             onClick={onClick}
             sidebarIsOpen={true}

@@ -964,7 +964,8 @@ const OnlineSearch = () => {
     <div className={classes.root}>
       <Title
         title={
-          'Navidrome - ' + translate('menu.onlineSearch', { _: 'Online Search' })
+          'Navidrome - ' +
+          translate('menu.onlineSearch', { _: 'Online Search' })
         }
       />
 
@@ -1028,7 +1029,9 @@ const OnlineSearch = () => {
           <CardContent>
             <div className={classes.hotHeader}>
               <Typography className={classes.hotTitle}>
-                {translate('online.search.hotSearch', { _: 'Trending Searches' })}
+                {translate('online.search.hotSearch', {
+                  _: 'Trending Searches',
+                })}
               </Typography>
               <Chip
                 size="small"
@@ -1050,7 +1053,9 @@ const OnlineSearch = () => {
             ) : hotList.length === 0 ? (
               <div className={classes.emptyBox}>
                 <Typography variant="body2">
-                  {translate('online.search.hotEmpty', { _: 'No trending data' })}
+                  {translate('online.search.hotEmpty', {
+                    _: 'No trending data',
+                  })}
                 </Typography>
               </div>
             ) : (
@@ -1098,7 +1103,9 @@ const OnlineSearch = () => {
                 disabled={hotLoading}
                 size="small"
               >
-                {translate('online.search.refreshHot', { _: 'Refresh Trending' })}
+                {translate('online.search.refreshHot', {
+                  _: 'Refresh Trending',
+                })}
               </Button>
             </div>
             {hotDebug && (
@@ -1379,14 +1386,13 @@ const OnlineSearch = () => {
                 const srcName = truncateSourceName(displayName)
                 if (!browserDownloadLoading) return '浏览器下载'
                 if (browserDownloadStatus === 'resolving')
-                  return srcName
-                    ? `${srcName} 解析中...`
-                    : '解析中...'
+                  return srcName ? `${srcName} 解析中...` : '解析中...'
                 if (browserDownloadStatus === 'downloading')
                   return browserDownloadProgress > 0
                     ? `${srcName} 下载中 ${browserDownloadProgress}%`
                     : `${srcName} 下载中...`
-                if (browserDownloadStatus === 'completed') return `${srcName} 完成`
+                if (browserDownloadStatus === 'completed')
+                  return `${srcName} 完成`
                 return `${srcName} 处理中...`
               })()}
             </Button>
@@ -1410,9 +1416,7 @@ const OnlineSearch = () => {
                 const srcName = truncateSourceName(selectedItem?.source || '')
                 if (!serverDownloadLoading) return '服务器下载'
                 if (serverDownloadStatus === 'resolving')
-                  return srcName
-                    ? `${srcName} 解析中...`
-                    : '解析中...'
+                  return srcName ? `${srcName} 解析中...` : '解析中...'
                 return `${srcName} 处理中...`
               })()}
             </Button>
