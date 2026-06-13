@@ -610,6 +610,10 @@
       "none": "无"
     },
     "settings": "设置",
+    "onlineSettings": "在线设置",
+    "onlineSearch": "在线搜索",
+    "download": "下载管理",
+    "online": "在线",
     "version": "版本",
     "theme": "主题",
     "personal": {
@@ -635,6 +639,32 @@
     "playlists": "歌单",
     "sharedPlaylists": "共享的歌单",
     "about": "关于"
+  },
+  "online": {
+    "title": "自定义在线源(Lx Source)",
+    "subtitle": "管理和配置第三方音乐脚本,支持lxmusic",
+    "downloadPathTitle": "下载路径设置",
+    "downloadPathLabel": "下载路径",
+    "downloadPathPlaceholder": "请输入下载路径",
+    "saveDownloadPath": "保存",
+    "manageOrAdd": "添加",
+    "enabled": "已启用",
+    "healthy": "正常",
+    "disable": "禁用",
+    "enable": "启用",
+    "search": {
+      "button": "搜索",
+      "hotSearch": "热门搜索",
+      "hotEmpty": "暂无热搜数据",
+      "refreshHot": "刷新热搜"
+    }
+  },
+  "downloadList": {
+    "retryAll": "全部重试",
+    "cancelAll": "全部取消",
+    "clearCompleted": "清空已完成",
+    "clearFailed": "清空失败",
+    "totalProgress": "总进度"
   },
   "player": {
     "playListsText": "播放队列",

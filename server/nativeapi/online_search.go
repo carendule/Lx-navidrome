@@ -448,6 +448,23 @@ function mapTXSong(list) {
   });
 }
 
+// kgImageUrl replaces the {size} placeholder in Kugou's image template
+// URLs with a concrete pixel size. KG uses different field names per
+// endpoint for the same template:
+//   - songsearch.kugou.com/song_search_v2   -> "Image"
+//   - mobilecdn.kugou.com/api/v3/search/song -> "union_cover"
+//   - mobiles.kugou.com/api/v3/search/album  -> "imgurl"
+// All of them carry the literal "{size}" token, which is a placeholder
+// rather than a usable URL. We default to 240px (matches lxmusic web's
+// chosen size — clear thumbnails without being wasteful).
+function kgImageUrl(item) {
+  if (!item) return '';
+  var raw = item.Image || item.union_cover || item.imgurl || item.img || item.pic || '';
+  if (!raw) return '';
+  if (raw.indexOf('{size}') === -1) return raw;
+  return String(raw).replace('{size}', '240');
+}
+
 function mapKGSong(list) {
   return (list || []).map(function(item) {
     return {
@@ -456,7 +473,7 @@ function mapKGSong(list) {
       singer: item.singername || item.SingerName || '',
       albumName: item.album_name || item.AlbumName || '',
       duration: toDurationMs(item.duration || item.Duration),
-      img: item.img || '',
+      img: kgImageUrl(item),
       source: 'kg',
       meta: item,
       qualitys: qualityFromFlags({
@@ -552,7 +569,7 @@ function mapSinger(list, src) {
     } else if (src === 'kg') {
       id = String(item.id || item.singerid || item.singerID || '');
       name = item.singername || item.singerName || item.name || '';
-      img = item.pic || item.img || item.singerPic || '';
+      img = kgImageUrl(item);
     } else if (src === 'kw') {
       id = String(item.ARTISTID || item.artistId || item.id || '');
       name = item.ARTIST || item.name || '';
@@ -601,7 +618,7 @@ function mapAlbum(list, src) {
       id = String(item.albumid || item.id || '');
       name = item.albumname || item.albumName || item.name || '';
       singer = item.singername || item.singerName || '';
-      img = item.pic || item.img || item.albumPic || '';
+      img = kgImageUrl(item);
     } else if (src === 'kw') {
       id = String(item.ALBUMID || item.albumId || item.id || '');
       name = item.ALBUM || item.albumName || item.name || '';

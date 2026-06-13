@@ -145,7 +145,7 @@ const Menu = ({ dense = false }) => {
         <MenuItemLink
           to="/online/search"
           activeClassName={classes.active}
-          primaryText={translate('menu.onlineSearch', { _: '在线搜索' })}
+          primaryText={translate('menu.onlineSearch', { _: 'Online Search' })}
           leftIcon={<SearchIcon />}
           sidebarIsOpen={open}
           dense={dense}

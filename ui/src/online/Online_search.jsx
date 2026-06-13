@@ -363,6 +363,15 @@ const QUALITY_ORDER = ['master', 'flac24bit', 'ape', 'flac', '320k', '128k']
 const getSourceBadge = (src) =>
   SOURCE_BADGE[src] || { bg: '#e7e7e7', color: '#666', name: src || '未知' }
 
+// Truncate a source name to a maximum of 5 visual characters, appending '…'
+// if the original was longer. Used by the download-option buttons to show
+// which source is currently resolving/downloading without overflowing.
+const truncateSourceName = (name, max = 5) => {
+  if (!name) return ''
+  if (name.length <= max) return name
+  return `${name.slice(0, max)}…`
+}
+
 const getQualityKeys = (item) => {
   const raw =
     item?.qualitys || item?._qualitys || item?.types || item?._types || {}
@@ -611,6 +620,11 @@ const OnlineSearch = () => {
   const [browserDownloadLoading, setBrowserDownloadLoading] = useState(false)
   const [browserDownloadProgress, setBrowserDownloadProgress] = useState(0)
   const [browserDownloadStatus, setBrowserDownloadStatus] = useState('idle')
+  // Human-readable source name reported by the backend once the resolve
+  // script has identified itself (e.g. "ikun[赞助][永久]"). For built-in
+  // sources (wy/tx/kg/kw/mg) this stays empty and we fall back to the
+  // selectedItem.source id. Reset whenever a new download kicks off.
+  const [browserDownloadSourceName, setBrowserDownloadSourceName] = useState('')
   const [serverDownloadLoading, setServerDownloadLoading] = useState(false)
   const [serverDownloadStatus, setServerDownloadStatus] = useState('idle')
 
@@ -769,6 +783,7 @@ const OnlineSearch = () => {
     setSelectedQuality('')
     setBrowserDownloadProgress(0)
     setBrowserDownloadStatus('idle')
+    setBrowserDownloadSourceName('')
     setServerDownloadStatus('idle')
   }, [])
   const handleCloseDownloadErrorDialog = useCallback(() => {
@@ -791,6 +806,7 @@ const OnlineSearch = () => {
     setBrowserDownloadLoading(true)
     setBrowserDownloadProgress(0)
     setBrowserDownloadStatus('resolving')
+    setBrowserDownloadSourceName('')
     try {
       const startResponse = await fetch(
         baseUrl('/api/online/download/browser/start'),
@@ -835,6 +851,9 @@ const OnlineSearch = () => {
         setBrowserDownloadStatus(status || 'resolving')
         if (Number.isFinite(p)) {
           setBrowserDownloadProgress(Math.max(0, Math.min(100, p)))
+        }
+        if (typeof statusData?.sourceName === 'string') {
+          setBrowserDownloadSourceName(statusData.sourceName)
         }
         if (statusData?.status === 'failed') {
           throw new Error(statusData?.error || 'task_failed')
@@ -890,6 +909,7 @@ const OnlineSearch = () => {
       setBrowserDownloadLoading(false)
       setBrowserDownloadProgress(0)
       setBrowserDownloadStatus('idle')
+      setBrowserDownloadSourceName('')
     }
   }, [handleCloseDownloadDialog, selectedItem, selectedQuality])
 
@@ -944,7 +964,7 @@ const OnlineSearch = () => {
     <div className={classes.root}>
       <Title
         title={
-          'Navidrome - ' + translate('menu.onlineSearch', { _: '在线搜索' })
+          'Navidrome - ' + translate('menu.onlineSearch', { _: 'Online Search' })
         }
       />
 
@@ -974,7 +994,7 @@ const OnlineSearch = () => {
           className={classes.searchBtn}
           onClick={handleSearch}
         >
-          {translate('online.search.button', { _: '搜索' })}
+          {translate('online.search.button', { _: 'Search' })}
         </Button>
         <Select
           className={`${classes.typeSelect} ${classes.selectControl}`}
@@ -1008,7 +1028,7 @@ const OnlineSearch = () => {
           <CardContent>
             <div className={classes.hotHeader}>
               <Typography className={classes.hotTitle}>
-                {translate('online.search.hotSearch', { _: '热门搜索' })}
+                {translate('online.search.hotSearch', { _: 'Trending Searches' })}
               </Typography>
               <Chip
                 size="small"
@@ -1030,7 +1050,7 @@ const OnlineSearch = () => {
             ) : hotList.length === 0 ? (
               <div className={classes.emptyBox}>
                 <Typography variant="body2">
-                  {translate('online.search.hotEmpty', { _: '暂无热搜数据' })}
+                  {translate('online.search.hotEmpty', { _: 'No trending data' })}
                 </Typography>
               </div>
             ) : (
@@ -1078,7 +1098,7 @@ const OnlineSearch = () => {
                 disabled={hotLoading}
                 size="small"
               >
-                {translate('online.search.refreshHot', { _: '刷新热搜' })}
+                {translate('online.search.refreshHot', { _: 'Refresh Trending' })}
               </Button>
             </div>
             {hotDebug && (
@@ -1350,17 +1370,25 @@ const OnlineSearch = () => {
                 browserDownloadLoading ? <CircularProgress size={16} /> : null
               }
             >
-              {browserDownloadLoading
-                ? browserDownloadStatus === 'resolving'
-                  ? '浏览器下载 解析中...'
-                  : browserDownloadStatus === 'downloading'
-                    ? browserDownloadProgress > 0
-                      ? `浏览器下载 ${browserDownloadProgress}%`
-                      : '浏览器下载 下载中...'
-                    : browserDownloadStatus === 'completed'
-                      ? '浏览器下载 完成'
-                      : '浏览器下载 处理中...'
-                : '浏览器下载'}
+              {(() => {
+                // Prefer the resolver's own display name (e.g. "ikun[赞助]…")
+                // when the backend has reported it; otherwise fall back to
+                // the source code selected in the search filter ("wy"/"kg"/…).
+                const displayName =
+                  browserDownloadSourceName || selectedItem?.source || ''
+                const srcName = truncateSourceName(displayName)
+                if (!browserDownloadLoading) return '浏览器下载'
+                if (browserDownloadStatus === 'resolving')
+                  return srcName
+                    ? `${srcName} 解析中...`
+                    : '解析中...'
+                if (browserDownloadStatus === 'downloading')
+                  return browserDownloadProgress > 0
+                    ? `${srcName} 下载中 ${browserDownloadProgress}%`
+                    : `${srcName} 下载中...`
+                if (browserDownloadStatus === 'completed') return `${srcName} 完成`
+                return `${srcName} 处理中...`
+              })()}
             </Button>
             <Button
               fullWidth
@@ -1372,11 +1400,21 @@ const OnlineSearch = () => {
                 serverDownloadLoading ? <CircularProgress size={16} /> : null
               }
             >
-              {serverDownloadLoading
-                ? serverDownloadStatus === 'resolving'
-                  ? '服务器下载 解析中...'
-                  : '服务器下载 处理中...'
-                : '服务器下载'}
+              {(() => {
+                // Server-mode runs resolveOnlineDownloadURL synchronously
+                // before returning a taskId, so the source name isn't
+                // streamed via the progress endpoint. Show the user-selected
+                // source id ("wy"/"kg"/…) up front; once the SSE stream in
+                // the global download panel reports the task, the name
+                // there is already populated by the backend.
+                const srcName = truncateSourceName(selectedItem?.source || '')
+                if (!serverDownloadLoading) return '服务器下载'
+                if (serverDownloadStatus === 'resolving')
+                  return srcName
+                    ? `${srcName} 解析中...`
+                    : '解析中...'
+                return `${srcName} 处理中...`
+              })()}
             </Button>
           </div>
         </DialogContent>
@@ -1392,7 +1430,7 @@ const OnlineSearch = () => {
         </DialogTitle>
         <DialogContent>
           <Typography variant="body2">
-            当前启用的音源无法解析出当前音质的直链信息
+            当前启用的音源无法解析出可用的直链信息
           </Typography>
           <div className={classes.downloadOptionList}>
             <Button

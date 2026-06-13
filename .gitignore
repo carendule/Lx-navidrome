@@ -40,3 +40,5 @@ openspec/
 .agents
 go.work*
 .worktrees/
+lxserver-main/
+source-scripts/

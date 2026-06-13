@@ -184,9 +184,27 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
     const activeRef = { current: true }
     refreshDownloadTasks(activeRef)
 
-    const timer = window.setInterval(() => {
+    // Subscribe to the SSE stream so the server pushes a wake-up
+    // signal on every task mutation. We re-snapshot via REST on each
+    // push, and close the EventSource as soon as the feature is
+    // hidden (or the component unmounts). The browser handles
+    // automatic reconnect on transient network errors.
+    //
+    // The native EventSource constructor cannot send custom headers,
+    // so we pass the JWT in the query string — the backend
+    // Authenticator accepts ?jwt=... for exactly this reason. See
+    // ui/src/eventStream.js for the same pattern on the global
+    // /api/events stream.
+    const token = localStorage.getItem('token')
+    const streamURL = token
+      ? `/api/online/download/tasks/stream?jwt=${encodeURIComponent(token)}`
+      : '/api/online/download/tasks/stream'
+    const eventSource = new EventSource(streamURL)
+
+    const handleStreamChange = () => {
       refreshDownloadTasks(activeRef)
-    }, 1200)
+    }
+    eventSource.addEventListener('tasks-changed', handleStreamChange)
 
     const handleTaskChanged = () => {
       refreshDownloadTasks(activeRef)
@@ -195,7 +213,8 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
 
     return () => {
       activeRef.current = false
-      window.clearInterval(timer)
+      eventSource.removeEventListener('tasks-changed', handleStreamChange)
+      eventSource.close()
       window.removeEventListener(ONLINE_DOWNLOAD_TASK_CHANGED_EVENT, handleTaskChanged)
     }
   }, [showOnlineSearch, refreshDownloadTasks])
@@ -229,6 +248,10 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
 
   const handleClearCompleted = useCallback(() => {
     postTaskAction('/api/online/download/tasks/clear-completed')
+  }, [postTaskAction])
+
+  const handleClearFailed = useCallback(() => {
+    postTaskAction('/api/online/download/tasks/clear-failed')
   }, [postTaskAction])
 
   const handleToggleTask = useCallback((taskID) => {
@@ -291,10 +314,10 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
         {...rest}
         beforeContent={
           showOnlineSearch ? (
-            <Tooltip title={translate('menu.download', { _: '下载管理' })}>
+            <Tooltip title={translate('menu.download', { _: 'Downloads' })}>
               <IconButton
                 className={classes.root}
-                aria-label={translate('menu.download', { _: '下载管理' })}
+                aria-label={translate('menu.download', { _: 'Downloads' })}
                 onClick={handleToggleDownloadList}
               >
                 <Badge
@@ -321,7 +344,7 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
             className={classes.root}
             activeClassName={classes.active}
             to="/online"
-            primaryText={translate('menu.onlineSettings', { _: '在线设置' })}
+            primaryText={translate('menu.onlineSettings', { _: 'Online Settings' })}
             leftIcon={<MdPublic size={24} />}
             onClick={onClick}
             sidebarIsOpen={true}
@@ -339,6 +362,7 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
         onRetryAll={handleRetryAll}
         onCancelAll={handleCancelAll}
         onClearCompleted={handleClearCompleted}
+        onClearFailed={handleClearFailed}
         onToggleTask={handleToggleTask}
       />
       <Dialogs />

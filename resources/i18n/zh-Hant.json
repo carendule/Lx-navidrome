@@ -604,6 +604,10 @@
   "menu": {
     "library": "媒體庫",
     "settings": "設定",
+    "onlineSettings": "線上設定",
+    "onlineSearch": "線上搜尋",
+    "download": "下載管理",
+    "online": "線上",
     "version": "版本",
     "theme": "主題",
     "personal": {
@@ -635,6 +639,32 @@
       "selectLibraries": "選取媒體庫",
       "none": "無"
     }
+  },
+  "online": {
+    "title": "自訂線上源(Lx Source)",
+    "subtitle": "管理與配置第三方音樂腳本,支援lxmusic",
+    "downloadPathTitle": "下載路徑設定",
+    "downloadPathLabel": "下載路徑",
+    "downloadPathPlaceholder": "請輸入下載路徑",
+    "saveDownloadPath": "儲存",
+    "manageOrAdd": "新增",
+    "enabled": "已啟用",
+    "healthy": "正常",
+    "disable": "停用",
+    "enable": "啟用",
+    "search": {
+      "button": "搜尋",
+      "hotSearch": "熱門搜尋",
+      "hotEmpty": "暫無熱搜資料",
+      "refreshHot": "重新整理熱搜"
+    }
+  },
+  "downloadList": {
+    "retryAll": "全部重試",
+    "cancelAll": "全部取消",
+    "clearCompleted": "清空已完成",
+    "clearFailed": "清空失敗",
+    "totalProgress": "總進度"
   },
   "player": {
     "playListsText": "播放佇列",

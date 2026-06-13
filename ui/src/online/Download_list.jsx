@@ -1,5 +1,6 @@
 import React from 'react'
 import PropTypes from 'prop-types'
+import { useTranslate } from 'react-admin'
 import {
     Box,
     Fade,
@@ -153,6 +154,8 @@ const statusLabel = {
     downloading: '下载中',
     completed: '已完成',
     failed: '失败',
+    paused: '已暂停',
+    canceled: '已取消',
 }
 
 const statusColor = {
@@ -161,6 +164,8 @@ const statusColor = {
     downloading: 'primary',
     completed: 'primary',
     failed: 'secondary',
+    paused: 'default',
+    canceled: 'default',
 }
 
 const taskStatusColorMap = {
@@ -169,6 +174,34 @@ const taskStatusColorMap = {
     downloading: '#2196f3',
     completed: '#4caf50',
     failed: '#f44336',
+    paused: '#607d8b',
+    canceled: '#9e9e9e',
+}
+
+// While a server download is in flight we show the *resolver script*
+// name (e.g. "ikun[赞助]…") instead of the static source code ("wy"),
+// because the user can see which candidate is currently being tried or
+// is being downloaded. Falls back to the source code when the script
+// name is missing (e.g. native wy/tx/kg/kw/mg paths, or pre-upgrade
+// tasks that pre-date the SourceName field).
+const inFlightStatuses = new Set(['queued', 'resolving', 'downloading'])
+
+const truncateSourceName = (name, max = 5) => {
+    if (!name) return ''
+    if (name.length <= max) return name
+    return `${name.slice(0, max)}…`
+}
+
+const formatInFlightLabel = (task) => {
+    const candidate = truncateSourceName(task?.sourceName || task?.source || '')
+    if (!candidate) return ''
+    if (task.status === 'resolving') return `${candidate} 解析中...`
+    if (task.status === 'downloading') {
+        const p = Math.max(0, Math.min(100, Number(task?.progress) || 0))
+        return p > 0 ? `${candidate} 下载中 ${p}%` : `${candidate} 下载中...`
+    }
+    if (task.status === 'queued') return `${candidate} 排队中`
+    return candidate
 }
 
 const DownloadList = ({
@@ -180,9 +213,11 @@ const DownloadList = ({
     onRetryAll,
     onCancelAll,
     onClearCompleted,
+    onClearFailed,
     onToggleTask,
 }) => {
     const classes = useStyles()
+    const translate = useTranslate()
     const taskOrderRef = React.useRef(new Map())
     const nextOrderRef = React.useRef(1)
 
@@ -255,7 +290,7 @@ const DownloadList = ({
 
                     <Box className={classes.summary}>
                         <Typography className={classes.summaryText}>
-                            总进度: {calculateTotalProgress()}%
+                            {translate('downloadList.totalProgress', { _: 'Total Progress' })}: {calculateTotalProgress()}%
                         </Typography>
                         <Box className={classes.actionRow}>
                             <Button
@@ -264,7 +299,7 @@ const DownloadList = ({
                                 className={classes.actionBtn}
                                 onClick={onRetryAll}
                             >
-                                全部重试
+                                {translate('downloadList.retryAll', { _: 'Retry All' })}
                             </Button>
                             <Button
                                 variant="outlined"
@@ -272,7 +307,7 @@ const DownloadList = ({
                                 className={classes.actionBtn}
                                 onClick={onCancelAll}
                             >
-                                全部取消
+                                {translate('downloadList.cancelAll', { _: 'Cancel All' })}
                             </Button>
                             <Button
                                 variant="outlined"
@@ -280,7 +315,15 @@ const DownloadList = ({
                                 className={classes.actionBtn}
                                 onClick={onClearCompleted}
                             >
-                                清空已完成
+                                {translate('downloadList.clearCompleted', { _: 'Clear Completed' })}
+                            </Button>
+                            <Button
+                                variant="outlined"
+                                size="small"
+                                className={classes.actionBtn}
+                                onClick={onClearFailed}
+                            >
+                                {translate('downloadList.clearFailed', { _: 'Clear Failed' })}
                             </Button>
                         </Box>
                     </Box>
@@ -312,7 +355,9 @@ const DownloadList = ({
                                 </Box>
 
                                 <Typography className={classes.taskMeta}>
-                                    {task.source} · {task.quality} · {task.artist}
+                                    {inFlightStatuses.has(task.status) && formatInFlightLabel(task)
+                                        ? `${formatInFlightLabel(task)} · ${task.quality} · ${task.artist}`
+                                        : `${task.source} · ${task.quality} · ${task.artist}`}
                                 </Typography>
 
                                 <Box className={classes.progressWrap}>
@@ -334,6 +379,7 @@ const DownloadList = ({
 DownloadList.propTypes = {
     onCancelAll: PropTypes.func,
     onClearCompleted: PropTypes.func,
+    onClearFailed: PropTypes.func,
     onClose: PropTypes.func,
     onRetryAll: PropTypes.func,
     onToggleTask: PropTypes.func,
@@ -356,6 +402,7 @@ DownloadList.propTypes = {
 DownloadList.defaultProps = {
     onCancelAll: () => { },
     onClearCompleted: () => { },
+    onClearFailed: () => { },
     onClose: () => { },
     onRetryAll: () => { },
     onToggleTask: () => { },

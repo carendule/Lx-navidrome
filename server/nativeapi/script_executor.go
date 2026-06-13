@@ -27,6 +27,7 @@ type ScriptExecutionResult struct {
 	Valid             bool
 	Sources           []string
 	Error             string
+	Warning           string
 	RequireUnsafe     bool
 	InitCallback      bool
 	RequestCallback   bool
@@ -51,8 +52,17 @@ const scriptExecutorBootstrap = `
 	if (!__global.console) {
 		__global.console = {};
 	}
-	['log', 'info', 'warn', 'error', 'debug', 'time', 'timeEnd'].forEach(function(name) {
-		if (typeof __global.console[name] !== 'function') __global.console[name] = function() {};
+	// Whitelist every standard console method. User scripts (lx-music style)
+	// commonly use console.group / groupEnd / count / table / trace / assert /
+	// dir etc.; a missing stub here produces a hard "console.groupEnd is not a
+	// function" TypeError that fails the whole init phase.
+	['log', 'info', 'warn', 'error', 'debug', 'time', 'timeEnd', 'timeLog', 'timeStamp',
+		'group', 'groupCollapsed', 'groupEnd',
+		'trace', 'assert', 'count', 'countReset',
+		'dir', 'dirxml', 'table', 'profile', 'profileEnd'].forEach(function(name) {
+		if (typeof __global.console[name] !== 'function') {
+			__global.console[name] = function() {};
+		}
 	});
 
 	if (typeof __global.setTimeout !== 'function') {
@@ -132,6 +142,25 @@ const vmTimeout = Number(process.env.ND_VM_TIMEOUT_MS || '5000');
 const initTimeoutMs = Number(process.env.ND_INIT_TIMEOUT_MS || '3000');
 const allowUnsafeVM = process.env.ND_UNSAFE_VM === 'true';
 
+// Downgrade Node's default fatal handling of unhandled rejections and
+// uncaught exceptions so they only emit a warning to stderr and never
+// crash the child process. The Go side will surface the warning text
+// via ScriptExecutionResult.Warning without treating the script as
+// invalid. Reference: lxserver-main registers the same listeners on
+// its main process for the same reason.
+process.on('unhandledRejection', (reason) => {
+    try {
+        const msg = reason && reason.message ? reason.message : String(reason);
+        process.stderr.write('UNHANDLED_REJECTION: ' + msg + '\n');
+    } catch (_) {}
+});
+process.on('uncaughtException', (err) => {
+    try {
+        const msg = err && err.message ? err.message : String(err);
+        process.stderr.write('UNCAUGHT_EXCEPTION: ' + msg + '\n');
+    } catch (_) {}
+});
+
 let script = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => { script += chunk; });
@@ -201,7 +230,29 @@ process.stdin.on('end', async () => {
 	};
 
 	const sandbox = {
-		console: allowUnsafeVM ? console : { log() {}, info() {}, warn() {}, error() {}, debug() {}, time() {}, timeEnd() {} },
+		// Stub the console: a Proxy that returns a noop function for
+		// every standard console method. The Proxy is required because
+		// Node's real console would emit things like "group-label" to
+		// stdout when console.group() is called, which would corrupt
+		// the JSON the bootstrap writes to stdout at the end of the
+		// script.
+		//
+		// Why not just a plain object? Obfuscated lx-music scripts do
+		// "this.console = { log: ... }" at the top of the script,
+		// which mutates the sandbox global and replaces our stub with
+		// a bare object that has no groupEnd/table/trace/etc. We
+		// defend against that by Object.defineProperty-ing the
+		// sandbox's "console" property as non-writable / non-config
+		// after the sandbox is built. Both strict and non-strict user
+		// scripts then silently fail to overwrite it.
+		console: new Proxy({}, {
+			get: function(_target, prop) {
+				if (typeof prop === 'string' && /^[a-zA-Z_$][\w$]*$/.test(prop)) {
+					return function() {};
+				}
+				return undefined;
+			},
+		}),
 		setTimeout,
 		clearTimeout,
 		setInterval,
@@ -229,6 +280,20 @@ process.stdin.on('end', async () => {
 	sandbox.global = sandbox;
 	sandbox.window = sandbox;
 	sandbox.globalThis = sandbox;
+	// Lock the console stub so user scripts (especially obfuscated
+	// lx-music ones) cannot replace it with a bare object via
+	// "this.console = ..." or similar. Without this, console.groupEnd()
+	// on the bare object throws "is not a function" and aborts init.
+	// defineProperty inside the bootstrap runs against the sandbox
+	// object itself, which is what user-land "this" / globalThis points
+	// at — so subsequent assignments silently fail in both strict and
+	// non-strict mode.
+	Object.defineProperty(sandbox, 'console', {
+		value: sandbox.console,
+		writable: false,
+		configurable: false,
+		enumerable: true,
+	});
 
 	try {
 		vm.runInContext(script, vm.createContext(sandbox), {
@@ -314,17 +379,39 @@ func (se *ScriptExecutor) executeWithNodeVM(ctx context.Context, scriptContent s
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
-		if stderr.Len() > 0 {
-			return nil, fmt.Errorf("node vm failed: %s", bytes.TrimSpace(stderr.Bytes()))
-		}
-		return nil, err
-	}
+	// The bootstrap installs `unhandledRejection` / `uncaughtException`
+	// listeners that downgrade Node's default fatal behaviour to a
+	// stderr warning, so cmd.Run() may still exit 0 even when a stray
+	// async rejection happens after the script successfully called
+	// lx.send('inited', ...). When cmd.Run() does fail, we still prefer
+	// the JSON the bootstrap wrote to stdout: a partial / non-fatal
+	// rejection should not invalidate a script that initialised
+	// successfully.
+	runErr := cmd.Run()
+	warning := strings.TrimSpace(stderr.String())
 
 	var nodeResult nodeScriptExecutionResult
-	if err := json.Unmarshal(stdout.Bytes(), &nodeResult); err != nil {
-		return nil, fmt.Errorf("invalid node vm response: %w", err)
+	stdoutJSON := bytes.TrimSpace(stdout.Bytes())
+	if len(stdoutJSON) > 0 {
+		if jerr := json.Unmarshal(stdoutJSON, &nodeResult); jerr != nil {
+			if runErr != nil {
+				if warning != "" {
+					return nil, fmt.Errorf("node vm failed: %s", warning)
+				}
+				return nil, runErr
+			}
+			return nil, fmt.Errorf("invalid node vm response: %w", jerr)
+		}
+		// stdout is valid; treat as success and ignore runErr. The
+		// variable is intentionally not reused below.
+		_ = runErr
+	} else if runErr != nil {
+		if warning != "" {
+			return nil, fmt.Errorf("node vm failed: %s", warning)
+		}
+		return nil, runErr
 	}
+
 	if nodeResult.Error != "" && bytes.Contains([]byte(nodeResult.Error), []byte("timed out")) {
 		nodeResult.Error = fmt.Sprintf("Script execution timeout (limit: %v)", se.timeout)
 	}
@@ -341,6 +428,7 @@ func (se *ScriptExecutor) executeWithNodeVM(ctx context.Context, scriptContent s
 		Valid:             nodeResult.Valid,
 		Sources:           nodeResult.Sources,
 		Error:             nodeResult.Error,
+		Warning:           warning,
 		RequireUnsafe:     false,
 		InitCallback:      nodeResult.InitCallback,
 		RequestCallback:   nodeResult.RequestCallback,

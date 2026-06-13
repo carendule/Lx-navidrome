@@ -44,6 +44,12 @@ type onlineBrowserDownloadProgressResponse struct {
 	Total     int64  `json:"total"`
 	Error     string `json:"error,omitempty"`
 	FileReady bool   `json:"fileReady"`
+	// SourceName is the human-readable name of the custom JS script that
+	// actually resolved the URL (e.g. "ikun[赞助][永久]"). It is set as
+	// soon as the resolve phase succeeds, so the frontend can show
+	// "ikun[赞助]… 解析中…" before the file actually starts streaming.
+	// Empty for built-in sources (wy/tx/kg/kw/mg) or if resolve failed.
+	SourceName string `json:"sourceName,omitempty"`
 }
 
 type onlineDownloadResolveInput struct {
@@ -84,22 +90,33 @@ type onlineDownloadTask struct {
 	TempPath    string
 	PauseWanted bool
 	CancelFunc  context.CancelFunc
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// SongInfo is the full normalized music-info payload that was
+	// handed to us by the frontend (id, songmid, hash, albumId, meta,
+	// types, etc.). Server-mode tasks replay it through
+	// resolveOnlineDownloadURLWithProgress on every fallback attempt,
+	// so the resolve script must see the *same* fields it would have
+	// seen in browser mode. Without this, scripts that key off
+	// info.songmid / info.id construct broken URLs and the download
+	// fails with 404. Browser-mode tasks keep this nil because
+	// runOnlineDownloadTask receives the normalized map directly.
+	SongInfo  map[string]any
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type onlineServerDownloadTaskView struct {
-	ID       string `json:"id"`
-	Title    string `json:"title"`
-	Artist   string `json:"artist"`
-	Source   string `json:"source"`
-	Quality  string `json:"quality"`
-	Status   string `json:"status"`
-	Progress int    `json:"progress"`
-	Received int64  `json:"received"`
-	Total    int64  `json:"total"`
-	Speed    int64  `json:"speed"`
-	Error    string `json:"error,omitempty"`
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	Artist     string `json:"artist"`
+	Source     string `json:"source"`
+	SourceName string `json:"sourceName,omitempty"`
+	Quality    string `json:"quality"`
+	Status     string `json:"status"`
+	Progress   int    `json:"progress"`
+	Received   int64  `json:"received"`
+	Total      int64  `json:"total"`
+	Speed      int64  `json:"speed"`
+	Error      string `json:"error,omitempty"`
 }
 
 type onlineServerDownloadTasksResponse struct {
@@ -117,6 +134,74 @@ var onlineDownloadTasks = struct {
 }{items: map[string]*onlineDownloadTask{}}
 
 const onlineDownloadTaskTTL = 30 * time.Minute
+
+// onlineDownloadTaskStallTimeout is the maximum wall-clock time a
+// server download task may stay in the "downloading" state with zero
+// bytes received before the stall detector fails it. The check fires
+// ONLY for tasks that have not yet produced any progress (Received == 0)
+// — once a task has read at least one byte, the deadline no longer
+// applies, because slow upstream servers or large files can take much
+// longer than 1 minute to complete.
+const onlineDownloadTaskStallTimeout = 1 * time.Minute
+
+// onlineDownloadTaskStallScanInterval is how often the stall detector
+// wakes up to scan for dead-link tasks. Smaller than the stall timeout
+// so we react promptly.
+const onlineDownloadTaskStallScanInterval = 10 * time.Second
+
+var startStallDetectorOnce sync.Once
+
+// downloadTaskBroker is a lightweight fan-out pub/sub that notifies
+// SSE clients whenever the download task list mutates. Each subscriber
+// holds a *persistent* buffered channel of size 1. The broadcaster
+// does a non-blocking send to each channel — if the channel already
+// holds an unread token the send is dropped (the subscriber will still
+// wake up and re-snapshot). Subscribers never need to re-subscribe
+// between signals, which eliminates the window where high-frequency
+// updates (e.g. per-chunk progress ticks) race with re-subscribe and
+// get silently dropped.
+var downloadTaskBroker = struct {
+	sync.Mutex
+	subs map[chan struct{}]struct{}
+}{subs: map[chan struct{}]struct{}{}}
+
+// subscribeDownloadTaskNotifications registers a persistent buffered
+// channel (capacity 1) and returns it together with an unsubscribe
+// function. The broker sends a non-blocking token into the channel on
+// every task mutation. Callers MUST NOT close the channel themselves;
+// they should call the returned unsubscribe function instead.
+func subscribeDownloadTaskNotifications() (chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	downloadTaskBroker.Lock()
+	downloadTaskBroker.subs[ch] = struct{}{}
+	downloadTaskBroker.Unlock()
+	return ch, func() {
+		downloadTaskBroker.Lock()
+		delete(downloadTaskBroker.subs, ch)
+		downloadTaskBroker.Unlock()
+		// Drain the channel so any blocked receiver unblocks cleanly.
+		select {
+		case <-ch:
+		default:
+		}
+	}
+}
+
+// broadcastDownloadTaskChange sends a non-blocking signal to every
+// subscriber. If a subscriber's channel already has an unconsumed token
+// the extra send is intentionally dropped — the subscriber will still
+// wake up and see the latest snapshot, which is always the canonical
+// source of truth. Safe to call from any goroutine and never blocks.
+func broadcastDownloadTaskChange() {
+	downloadTaskBroker.Lock()
+	defer downloadTaskBroker.Unlock()
+	for ch := range downloadTaskBroker.subs {
+		select {
+		case ch <- struct{}{}:
+		default: // already has a pending token; subscriber will still wake up
+		}
+	}
+}
 
 const nodeOnlineDownloadScript = `
 const vm = require('vm');
@@ -332,7 +417,19 @@ process.stdin.on('end', async () => {
   };
 
   const sandbox = {
-    console: allowUnsafe ? console : { log() {}, info() {}, warn() {}, error() {}, debug() {}, time() {}, timeEnd() {} },
+    // Mirror the script_executor bootstrap: Proxy-based console stub
+    // that returns a noop for every standard method (so lx-music style
+    // scripts that call console.groupEnd / table / count don't crash)
+    // AND is locked via Object.defineProperty below to prevent
+    // obfuscated scripts from overwriting it with a bare object.
+    console: allowUnsafe ? console : new Proxy({}, {
+      get: function(_target, prop) {
+        if (typeof prop === 'string' && /^[a-zA-Z_$][\w$]*$/.test(prop)) {
+          return function() {};
+        }
+        return undefined;
+      },
+    }),
     setTimeout,
     clearTimeout,
     setInterval,
@@ -357,6 +454,16 @@ process.stdin.on('end', async () => {
   sandbox.global = sandbox;
   sandbox.window = sandbox;
   sandbox.globalThis = sandbox;
+  // Lock the console stub on the sandbox global so scripts cannot
+  // replace it with "this.console = ..." or "globalThis.console = ...".
+  // Without this, console.groupEnd() on a bare replacement object
+  // throws "is not a function" mid-request and aborts the download.
+  Object.defineProperty(sandbox, 'console', {
+    value: sandbox.console,
+    writable: false,
+    configurable: false,
+    enumerable: true,
+  });
 
   try {
     vm.runInContext(payload.script, vm.createContext(sandbox), {
@@ -451,13 +558,21 @@ process.stdin.on('end', async () => {
 `
 
 func (api *Router) addOnlineDownloadRoutes(r chi.Router) {
+	// Start the stall detector exactly once, the first time the routes
+	// are wired up. Doing it here (instead of package init) means tests
+	// that exercise the package without registering routes do not leak
+	// the background goroutine.
+	startStallDetector()
+
 	r.Route("/online/download", func(r chi.Router) {
 		r.Post("/server/start", api.onlineServerDownloadStart)
 		r.Get("/tasks", api.onlineServerDownloadTasks)
+		r.Get("/tasks/stream", api.onlineServerDownloadTasksStream)
 		r.Post("/task/{taskID}/toggle", api.onlineServerDownloadToggle)
 		r.Post("/tasks/retry", api.onlineServerDownloadRetryAll)
 		r.Post("/tasks/cancel", api.onlineServerDownloadCancelAll)
 		r.Post("/tasks/clear-completed", api.onlineServerDownloadClearCompleted)
+		r.Post("/tasks/clear-failed", api.onlineServerDownloadClearFailed)
 		r.Post("/browser/start", api.onlineBrowserDownloadStart)
 		r.Get("/browser/progress/{taskID}", api.onlineBrowserDownloadProgress)
 		r.Get("/browser/file/{taskID}", api.onlineBrowserDownloadFile)
@@ -501,13 +616,14 @@ func (api *Router) onlineBrowserDownloadProgress(w http.ResponseWriter, r *http.
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(onlineBrowserDownloadProgressResponse{
-		TaskID:    task.ID,
-		Status:    task.Status,
-		Progress:  task.Progress,
-		Received:  task.Received,
-		Total:     task.Total,
-		Error:     task.Error,
-		FileReady: task.Status == "completed" && task.FilePath != "",
+		TaskID:     task.ID,
+		Status:     task.Status,
+		Progress:   task.Progress,
+		Received:   task.Received,
+		Total:      task.Total,
+		Error:      task.Error,
+		FileReady:  task.Status == "completed" && task.FilePath != "",
+		SourceName: task.SourceName,
 	})
 }
 
@@ -613,16 +729,6 @@ func (api *Router) onlineServerDownloadStart(w http.ResponseWriter, r *http.Requ
 		quality = bestOnlineDownloadQuality(req.SongInfo)
 	}
 
-	normalized := normalizeOnlineDownloadSongInfo(req.SongInfo)
-	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
-	defer cancel()
-
-	resolvedURL, sourceName, resolvedHeaders, err := resolveOnlineDownloadURL(ctx, songSource, normalized, quality)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-
 	settings, err := loadOnlineSourceSettings()
 	if err != nil {
 		http.Error(w, "could not load online settings", http.StatusInternalServerError)
@@ -637,7 +743,8 @@ func (api *Router) onlineServerDownloadStart(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	taskID := createOnlineServerDownloadTask(normalized, songSource, sourceName, quality, resolvedURL, resolvedHeaders, downloadDir)
+	normalized := normalizeOnlineDownloadSongInfo(req.SongInfo)
+	taskID := createOnlineServerDownloadTask(normalized, songSource, quality, downloadDir)
 	go runOnlineServerDownloadTask(taskID) //nolint:gosec
 
 	w.Header().Set("Content-Type", "application/json")
@@ -647,6 +754,59 @@ func (api *Router) onlineServerDownloadStart(w http.ResponseWriter, r *http.Requ
 func (api *Router) onlineServerDownloadTasks(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(listOnlineServerDownloadTasks())
+}
+
+// onlineServerDownloadTasksStream pushes a "tasks-changed" event over
+// SSE every time the in-memory download task list mutates. The browser
+// is expected to call GET /api/online/download/tasks on each event to
+// fetch the actual snapshot. We send only a signal, not the payload, to
+// keep the wire format tiny and avoid races between mutation and
+// snapshot generation.
+//
+// A 15s keep-alive comment is also emitted so reverse proxies (nginx)
+// and intermediaries do not close the idle connection.
+func (api *Router) onlineServerDownloadTasksStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	// Send a comment line immediately so the browser's EventSource
+	// onopen fires before any real event. This also primes proxies
+	// that buffer until the first write.
+	_, _ = fmt.Fprint(w, ": stream-open\n\n")
+	flusher.Flush()
+
+	ch, unsubscribe := subscribeDownloadTaskNotifications()
+	defer unsubscribe()
+
+	keepAlive := time.NewTicker(15 * time.Second)
+	defer keepAlive.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-keepAlive.C:
+			if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		case <-ch:
+			if _, err := fmt.Fprint(w, "event: tasks-changed\ndata: {}\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+			// The channel is persistent (non-closing broker); no need
+			// to re-subscribe. Simply drain and loop back to select.
+		}
+	}
 }
 
 func (api *Router) onlineServerDownloadToggle(w http.ResponseWriter, r *http.Request) {
@@ -684,13 +844,26 @@ func (api *Router) onlineServerDownloadClearCompleted(w http.ResponseWriter, _ *
 	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
+func (api *Router) onlineServerDownloadClearFailed(w http.ResponseWriter, _ *http.Request) {
+	clearFailedOnlineServerDownloadTasks()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// createOnlineServerDownloadTask inserts a freshly-created server-mode
+// download task into the in-memory task list and broadcasts a change
+// event so the Download_list UI sees the new entry immediately.
+//
+// ResolvedURL, Headers, FilePath, FileName and TempPath are intentionally
+// left empty: the resolve phase is run asynchronously by
+// runOnlineServerDownloadTask so the user can see the task (and the
+// "resolving…" state) right away, and any later fallback to a different
+// script can rewrite the on-disk filename without leaving orphan .part
+// files from the previous attempt.
 func createOnlineServerDownloadTask(
 	songInfo map[string]any,
 	source string,
-	sourceName string,
 	quality string,
-	resolvedURL string,
-	resolvedHeaders map[string]string,
 	downloadDir string,
 ) string {
 	now := time.Now()
@@ -709,40 +882,27 @@ func createOnlineServerDownloadTask(
 		artist = "未知歌手"
 	}
 
-	fileName := onlineDownloadFileName(songInfo, quality, resolvedURL)
-	if !strings.Contains(fileName, ".") {
-		fileName += ".mp3"
-	}
-	finalPath := uniqueOnlineDownloadPath(downloadDir, fileName)
-	tempPath := finalPath + ".part"
-
-	headers := map[string]string{}
-	for k, v := range resolvedHeaders {
-		headers[k] = v
-	}
-
 	onlineDownloadTasks.Lock()
-	defer onlineDownloadTasks.Unlock()
-	cleanupExpiredOnlineDownloadTasksLocked(now)
+	_ = cleanupExpiredOnlineDownloadTasksLocked(now)
 	onlineDownloadTasks.items[id] = &onlineDownloadTask{
 		ID:          id,
 		Mode:        "server",
 		Title:       title,
 		Artist:      artist,
 		Source:      source,
-		SourceName:  sourceName,
 		Quality:     quality,
 		Status:      "queued",
 		Progress:    0,
-		FilePath:    finalPath,
-		FileName:    fileName,
-		ResolvedURL: resolvedURL,
-		Headers:     headers,
 		DownloadDir: downloadDir,
-		TempPath:    tempPath,
+		SongInfo:    songInfo,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
+	onlineDownloadTasks.Unlock()
+	// Notify SSE subscribers after the write lock is released so
+	// subscribers can immediately re-snapshot the new state. Always
+	// broadcast — the new task itself is a change worth signaling.
+	broadcastDownloadTaskChange()
 	return id
 }
 
@@ -755,59 +915,224 @@ func runOnlineServerDownloadTask(taskID string) {
 		return
 	}
 
+	downloadDir := strings.TrimSpace(task.DownloadDir)
+	if downloadDir == "" {
+		settings, settingsErr := loadOnlineSourceSettings()
+		if settingsErr == nil {
+			downloadDir = strings.TrimSpace(settings.DownloadPath)
+		}
+	}
+	if downloadDir == "" {
+		downloadDir = defaultOnlineDownloadPath()
+	}
+	if err := os.MkdirAll(downloadDir, 0o755); err != nil {
+		setOnlineDownloadTaskFailed(taskID, fmt.Errorf("创建下载目录失败: %w", err))
+		return
+	}
+
+	songSource := task.Source
+	quality := task.Quality
+
+	// Load the candidate list once up front. The set of enabled scripts
+	// is allowed to change between candidates (the user might toggle one
+	// off mid-download) but re-reading on every iteration would let a
+	// race reorder the fallback sequence, which is harder to reason
+	// about than simply locking the order at task start.
+	candidates, err := loadEnabledSourcesForSong(songSource)
+	if err != nil {
+		setOnlineDownloadTaskFailed(taskID, fmt.Errorf("加载音源失败: %w", err))
+		return
+	}
+	if len(candidates) == 0 {
+		setOnlineDownloadTaskFailed(taskID, fmt.Errorf("未找到支持 %s 的启用音源脚本", songSource))
+		return
+	}
+
+	// Pre-populate the resolve phase with the first candidate so the
+	// download list shows a meaningful name immediately. The actual
+	// download phase rewrites the source name once a candidate wins.
+	firstCandidateName := candidates[0].Name
 	ctx, cancel := context.WithCancel(context.Background())
 	updateOnlineDownloadTask(taskID, func(t *onlineDownloadTask) {
 		t.CancelFunc = cancel
 		t.PauseWanted = false
 		t.Error = ""
-		t.Status = "downloading"
-		if t.Progress < 0 {
-			t.Progress = 0
-		}
+		t.Status = "resolving"
+		t.Progress = 0
+		t.Received = 0
+		t.Total = 0
+		t.Speed = 0
+		t.SourceName = firstCandidateName
 	})
 
-	result, err := downloadOnlineServerTaskToPath(ctx, taskID)
-	if err != nil {
-		taskAfter, exists := getOnlineDownloadTaskPointer(taskID)
-		if !exists {
+	// Re-fetch the songInfo from the (now potentially updated) task.
+	// The struct only carries source/quality, so we re-normalize from
+	// the persisted fields via the helper in case other fields are
+	// present on the task (none currently are, but this keeps the
+	// interface symmetric with runOnlineDownloadTask).
+	_ = quality
+
+	var attemptErrors []string
+	done := false
+	for _, candidate := range candidates {
+		if done {
+			break
+		}
+		// Each iteration gets its own attempt ctx so a failed previous
+		// candidate's deadline doesn't carry over. We bail cleanly when
+		// the outer ctx (user cancel / stall detector) is canceled.
+		attemptCtx, attemptCancel := context.WithCancel(ctx)
+
+		updateOnlineDownloadTask(taskID, func(t *onlineDownloadTask) {
+			t.Status = "resolving"
+			t.Progress = 0
+			t.Received = 0
+			t.Total = 0
+			t.Speed = 0
+			t.SourceName = candidate.Name
+		})
+
+		// Replay the original normalized songInfo for every fallback
+		// attempt so the resolve script sees the same payload it would
+		// have seen in browser mode (id, songmid, hash, meta, …).
+		// Reconstructing it from Title/Artist/etc. was lossy and caused
+		// scripts that key off info.songmid to construct broken URLs.
+		normalized := task.SongInfo
+		if normalized == nil {
+			normalized = buildOnlineDownloadTaskSongInfo(task)
+		}
+
+		resolvedURL, resolvedHeaders, sourceName, resolveErr := resolveOnlineDownloadURLWithProgress(attemptCtx, candidate, songSource, normalized, quality)
+		if resolveErr != nil {
+			attemptErrors = append(attemptErrors, fmt.Sprintf("%s 解析失败: %v", sourceName, resolveErr))
+			log.Info(attemptCtx, "Online server download resolve failed, trying next candidate", "task", taskID, "candidate", sourceName, "err", resolveErr)
+			attemptCancel()
+			if ctx.Err() != nil {
+				markServerTaskTerminal(taskID, ctx.Err())
+				done = true
+			}
+			continue
+		}
+
+		// Resolve succeeded: build the on-disk file paths for this
+		// attempt, populate the task, and stream.
+		fileName := onlineDownloadFileName(normalized, quality, resolvedURL)
+		if !strings.Contains(fileName, ".") {
+			fileName += ".mp3"
+		}
+		finalPath := uniqueOnlineDownloadPath(downloadDir, fileName)
+		tempPath := finalPath + ".part"
+		headers := map[string]string{}
+		for k, v := range resolvedHeaders {
+			headers[k] = v
+		}
+
+		updateOnlineDownloadTask(taskID, func(t *onlineDownloadTask) {
+			t.Status = "downloading"
+			t.Progress = 0
+			t.Received = 0
+			t.Total = 0
+			t.Speed = 0
+			t.SourceName = sourceName
+			t.FileName = fileName
+			t.FilePath = finalPath
+			t.TempPath = tempPath
+			t.ResolvedURL = resolvedURL
+			t.Headers = headers
+		})
+
+		// downloadOnlineServerTaskToPath streams the body into
+		// task.TempPath, supporting HTTP redirects (6 hops) and Range
+		// resume. It returns once the file is fully written and
+		// renamed to task.FilePath.
+		result, fetchErr := downloadOnlineServerTaskToPath(attemptCtx, taskID)
+		attemptCancel()
+		if fetchErr == nil {
+			updateOnlineDownloadTask(taskID, func(t *onlineDownloadTask) {
+				t.Status = "completed"
+				t.Progress = 100
+				t.Received = result.Size
+				t.Total = result.Size
+				t.Speed = 0
+				t.FilePath = result.FilePath
+				t.FileName = result.FileName
+				t.ContentType = result.ContentType
+				t.CancelFunc = nil
+			})
+			done = true
+			continue
+		}
+
+		// Download failed. Honor outer-ctx cancellation (user cancel
+		// or stall detector) before recording the failure.
+		if ctx.Err() != nil {
+			markServerTaskTerminal(taskID, ctx.Err())
+			done = true
+			continue
+		}
+
+		attemptErrors = append(attemptErrors, fmt.Sprintf("%s 下载失败: %v", sourceName, fetchErr))
+		log.Warn(attemptCtx, "Online server download failed, trying next candidate", "task", taskID, "candidate", sourceName, "err", fetchErr)
+
+		// Strip the orphaned .part file so the next candidate starts
+		// clean. downloadOnlineServerTaskToPath already cleans up
+		// its own tempPath on most errors, but a few edge cases (e.g.
+		// the file was successfully renamed but the ctx fired right
+		// before this point) can leak a file behind.
+		if tempPath != "" {
+			_ = os.Remove(tempPath)
+		}
+	}
+
+	if !done {
+		setOnlineDownloadTaskFailed(taskID, fmt.Errorf("所有启用音源均解析或下载失败: %s", strings.Join(attemptErrors, "; ")))
+	}
+}
+
+// markServerTaskTerminal maps a context error into the appropriate
+// terminal state (paused / canceled / failed) for a server-mode task.
+// It mirrors the legacy behavior previously inlined into
+// runOnlineServerDownloadTask.
+func markServerTaskTerminal(taskID string, err error) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		task, ok := getOnlineDownloadTaskPointer(taskID)
+		if !ok {
 			return
 		}
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			if taskAfter.PauseWanted {
-				updateOnlineDownloadTask(taskID, func(t *onlineDownloadTask) {
-					t.Status = "paused"
-					t.Speed = 0
-					t.CancelFunc = nil
-				})
-				return
-			}
+		if task.PauseWanted {
 			updateOnlineDownloadTask(taskID, func(t *onlineDownloadTask) {
-				t.Status = "canceled"
+				t.Status = "paused"
 				t.Speed = 0
 				t.CancelFunc = nil
 			})
 			return
 		}
 		updateOnlineDownloadTask(taskID, func(t *onlineDownloadTask) {
-			t.Status = "failed"
-			t.Error = err.Error()
+			t.Status = "canceled"
 			t.Speed = 0
 			t.CancelFunc = nil
 		})
 		return
 	}
+	setOnlineDownloadTaskFailed(taskID, err)
+}
 
-	updateOnlineDownloadTask(taskID, func(t *onlineDownloadTask) {
-		t.Status = "completed"
-		t.Progress = 100
-		t.Received = result.Size
-		t.Total = result.Size
-		t.Speed = 0
-		t.FilePath = result.FilePath
-		t.FileName = result.FileName
-		t.ContentType = result.ContentType
-		t.CancelFunc = nil
-	})
+// buildOnlineDownloadTaskSongInfo reconstructs a map suitable for
+// resolveOnlineDownloadURLWithProgress from the fields we persist on
+// onlineDownloadTask. Today the server-side task only keeps Source /
+// Quality / Title / Artist, so the rest of the script's expected music
+// info (name, singer, songmid, ...) is best-effort derived from those
+// fields plus any other keys that ended up on the struct via the
+// initial /online/server/start payload.
+func buildOnlineDownloadTaskSongInfo(task *onlineDownloadTask) map[string]any {
+	out := map[string]any{
+		"name":    task.Title,
+		"singer":  task.Artist,
+		"source":  task.Source,
+		"quality": task.Quality,
+		"id":      task.ID,
+	}
+	return out
 }
 
 func downloadOnlineServerTaskToPath(ctx context.Context, taskID string) (*fetchedOnlineTempFile, error) {
@@ -1056,17 +1381,18 @@ func listOnlineServerDownloadTasks() onlineServerDownloadTasksResponse {
 			continue
 		}
 		view := onlineServerDownloadTaskView{
-			ID:       task.ID,
-			Title:    task.Title,
-			Artist:   task.Artist,
-			Source:   task.Source,
-			Quality:  task.Quality,
-			Status:   task.Status,
-			Progress: task.Progress,
-			Received: task.Received,
-			Total:    task.Total,
-			Speed:    task.Speed,
-			Error:    task.Error,
+			ID:         task.ID,
+			Title:      task.Title,
+			Artist:     task.Artist,
+			Source:     task.Source,
+			SourceName: task.SourceName,
+			Quality:    task.Quality,
+			Status:     task.Status,
+			Progress:   task.Progress,
+			Received:   task.Received,
+			Total:      task.Total,
+			Speed:      task.Speed,
+			Error:      task.Error,
 		}
 		tasks = append(tasks, view)
 		progressSum += task.Progress
@@ -1178,64 +1504,228 @@ func cancelAllOnlineServerDownloadTasks() {
 
 func clearCompletedOnlineServerDownloadTasks() {
 	onlineDownloadTasks.Lock()
-	defer onlineDownloadTasks.Unlock()
+	removed := false
 	for id, task := range onlineDownloadTasks.items {
 		if task.Mode == "server" && task.Status == "completed" {
 			delete(onlineDownloadTasks.items, id)
+			removed = true
 		}
+	}
+	onlineDownloadTasks.Unlock()
+	if removed {
+		broadcastDownloadTaskChange()
+	}
+}
+
+// clearFailedOnlineServerDownloadTasks removes all server-mode tasks
+// that ended up in a terminal "no progress" state (failed, paused,
+// canceled), and also deletes their on-disk .part temp files. In-flight
+// downloading tasks are left alone.
+func clearFailedOnlineServerDownloadTasks() {
+	terminal := map[string]bool{
+		"failed":   true,
+		"paused":   true,
+		"canceled": true,
+	}
+
+	// First pass: collect temp paths to clean up *after* releasing the
+	// lock. We hold the write lock briefly, but never touch the
+	// filesystem while holding it (other goroutines may also want the
+	// lock and we don't want file I/O to gate them).
+	type removedTask struct {
+		id       string
+		tempPath string
+	}
+	onlineDownloadTasks.Lock()
+	removed := make([]removedTask, 0)
+	for id, task := range onlineDownloadTasks.items {
+		if task.Mode == "server" && terminal[task.Status] {
+			removed = append(removed, removedTask{id: id, tempPath: task.TempPath})
+			delete(onlineDownloadTasks.items, id)
+		}
+	}
+	onlineDownloadTasks.Unlock()
+
+	for _, r := range removed {
+		if r.tempPath != "" {
+			_ = os.Remove(r.tempPath)
+		}
+	}
+
+	if len(removed) > 0 {
+		broadcastDownloadTaskChange()
+	}
+}
+
+// startStallDetector launches a single background goroutine that
+// periodically scans for download tasks that have been "downloading"
+// with zero bytes received for longer than onlineDownloadTaskStallTimeout.
+// Such tasks are treated as dead-link failures and moved to status
+// "failed" — their in-flight ctx is canceled and their .part file is
+// deleted. The check is gated on Received == 0, so a slow but
+// progressing download is never killed.
+func startStallDetector() {
+	startStallDetectorOnce.Do(func() {
+		go func() {
+			ticker := time.NewTicker(onlineDownloadTaskStallScanInterval)
+			defer ticker.Stop()
+			for range ticker.C {
+				detectAndFailStalledTasks()
+			}
+		}()
+	})
+}
+
+// detectAndFailStalledTasks is the body of the stall detector. It is
+// also exported (lowercase, same package) for unit tests that drive it
+// directly without waiting for the ticker.
+func detectAndFailStalledTasks() {
+	now := time.Now()
+
+	// Snapshot the candidate IDs under the read lock, then operate on
+	// them under write locks (one per task). This keeps the read lock
+	// window short and avoids holding any lock across the ctx.Cancel /
+	// os.Remove calls below.
+	type candidate struct {
+		id         string
+		createdAt  time.Time
+		cancelFunc context.CancelFunc
+		tempPath   string
+	}
+
+	onlineDownloadTasks.RLock()
+	candidates := make([]candidate, 0)
+	for id, task := range onlineDownloadTasks.items {
+		// Cover both server-mode and browser-mode download tasks. We
+		// also accept the empty string for backwards compatibility with
+		// tasks created before the Mode field was added.
+		if task.Mode != "server" && task.Mode != "browser" && task.Mode != "" {
+			continue
+		}
+		if task.Status != "downloading" && task.Status != "resolving" {
+			continue
+		}
+		if task.Received > 0 {
+			continue
+		}
+		if now.Sub(task.CreatedAt) <= onlineDownloadTaskStallTimeout {
+			continue
+		}
+		candidates = append(candidates, candidate{
+			id:         id,
+			createdAt:  task.CreatedAt,
+			cancelFunc: task.CancelFunc,
+			tempPath:   task.TempPath,
+		})
+	}
+	onlineDownloadTasks.RUnlock()
+
+	for _, c := range candidates {
+		if c.cancelFunc != nil {
+			c.cancelFunc()
+		}
+		updateOnlineDownloadTask(c.id, func(t *onlineDownloadTask) {
+			t.Status = "failed"
+			t.Error = fmt.Sprintf("Download stalled: no bytes received within %s (likely dead link)", onlineDownloadTaskStallTimeout)
+			t.Speed = 0
+			t.CancelFunc = nil
+		})
+		if c.tempPath != "" {
+			_ = os.Remove(c.tempPath)
+		}
+	}
+
+	if len(candidates) > 0 {
+		broadcastDownloadTaskChange()
 	}
 }
 
 func resolveOnlineDownloadURL(ctx context.Context, songSource string, songInfo map[string]any, quality string) (string, string, map[string]string, error) {
-	if _, err := exec.LookPath("node"); err != nil {
-		return "", "", nil, fmt.Errorf("node not available")
-	}
-
-	sources, err := loadOnlineSources()
+	sources, err := loadEnabledSourcesForSong(songSource)
 	if err != nil {
 		return "", "", nil, err
 	}
-	sources = normalizeOnlineSourcesOrder(sources)
+	if len(sources) == 0 {
+		return "", "", nil, fmt.Errorf("未找到支持 %s 的启用音源脚本", songSource)
+	}
 
 	var attemptErrors []string
 	for _, source := range sources {
-		if !source.Enabled || !containsString(source.SupportedSources, songSource) {
-			continue
+		url, headers, name, resolveErr := resolveOnlineDownloadURLWithProgress(ctx, source, songSource, songInfo, quality)
+		if resolveErr == nil {
+			return url, name, headers, nil
 		}
-
-		scriptPath := filepath.Join(onlineScriptsDir(), source.ID)
-		scriptContent, err := os.ReadFile(scriptPath)
-		if err != nil {
-			attemptErrors = append(attemptErrors, fmt.Sprintf("%s: 读取脚本失败: %v", source.Name, err))
-			continue
+		attemptErrors = append(attemptErrors, fmt.Sprintf("%s: %v", source.Name, resolveErr))
+		if ctx.Err() != nil {
+			break
 		}
-
-		for attempt := 1; attempt <= onlineDownloadScriptRetries; attempt++ {
-			attemptCtx, cancel := context.WithTimeout(ctx, onlineDownloadScriptTimeout)
-			url, headers, resolveErr := executeOnlineDownloadScript(attemptCtx, onlineDownloadResolveInput{
-				Script:      string(scriptContent),
-				AllowUnsafe: source.AllowUnsafeVM,
-				Source:      songSource,
-				MusicInfo:   songInfo,
-				Quality:     quality,
-			})
-			cancel()
-			if resolveErr == nil {
-				return url, source.Name, headers, nil
-			}
-			attemptErrors = append(attemptErrors, fmt.Sprintf("%s 第%d次: %v", source.Name, attempt, resolveErr))
-			if ctx.Err() != nil {
-				break
-			}
-		}
-	}
-
-	if len(attemptErrors) == 0 {
-		return "", "", nil, fmt.Errorf("未找到支持 %s 的启用音源脚本", songSource)
 	}
 	return "", "", nil, fmt.Errorf("%s", strings.Join(attemptErrors, "; "))
 }
 
+// loadEnabledSourcesForSong returns the enabled source scripts that
+// support the given song source, in the user-configured priority order.
+func loadEnabledSourcesForSong(songSource string) ([]onlineSource, error) {
+	all, err := loadOnlineSources()
+	if err != nil {
+		return nil, err
+	}
+	all = normalizeOnlineSourcesOrder(all)
+	out := make([]onlineSource, 0, len(all))
+	for _, s := range all {
+		if s.Enabled && containsString(s.SupportedSources, songSource) {
+			out = append(out, s)
+		}
+	}
+	return out, nil
+}
+
+// resolveOnlineDownloadURLWithProgress invokes a single source script up to
+// onlineDownloadScriptRetries times until it returns a resolved URL.
+// Callers that want to try multiple scripts in sequence (with a download
+// phase in between) should iterate loadEnabledSourcesForSong themselves
+// and invoke this helper for each candidate.
+func resolveOnlineDownloadURLWithProgress(
+	ctx context.Context,
+	source onlineSource,
+	songSource string,
+	songInfo map[string]any,
+	quality string,
+) (string, map[string]string, string, error) {
+	if _, err := exec.LookPath("node"); err != nil {
+		return "", nil, "", fmt.Errorf("node not available")
+	}
+
+	scriptPath := filepath.Join(onlineScriptsDir(), source.ID)
+	scriptContent, err := os.ReadFile(scriptPath)
+	if err != nil {
+		return "", nil, "", fmt.Errorf("读取脚本失败: %w", err)
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= onlineDownloadScriptRetries; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, onlineDownloadScriptTimeout)
+		url, headers, resolveErr := executeOnlineDownloadScript(attemptCtx, onlineDownloadResolveInput{
+			Script:      string(scriptContent),
+			AllowUnsafe: source.AllowUnsafeVM,
+			Source:      songSource,
+			MusicInfo:   songInfo,
+			Quality:     quality,
+		})
+		cancel()
+		if resolveErr == nil {
+			return url, headers, source.Name, nil
+		}
+		lastErr = fmt.Errorf("第%d次: %w", attempt, resolveErr)
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no attempts made")
+	}
+	return "", nil, "", lastErr
+}
 func executeOnlineDownloadScript(ctx context.Context, input onlineDownloadResolveInput) (string, map[string]string, error) {
 	payload, err := json.Marshal(input)
 	if err != nil {
@@ -1471,16 +1961,17 @@ func createOnlineDownloadTask() string {
 	id := fmt.Sprintf("odl_%d_%d", now.UnixNano(), int64(buf[0])<<56|int64(buf[1])<<48|int64(buf[2])<<40|int64(buf[3])<<32|int64(buf[4])<<24|int64(buf[5])<<16|int64(buf[6])<<8|int64(buf[7]))
 
 	onlineDownloadTasks.Lock()
-	defer onlineDownloadTasks.Unlock()
-
-	cleanupExpiredOnlineDownloadTasksLocked(now)
+	_ = cleanupExpiredOnlineDownloadTasksLocked(now)
 	onlineDownloadTasks.items[id] = &onlineDownloadTask{
 		ID:        id,
+		Mode:      "browser",
 		Status:    "queued",
 		Progress:  0,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
+	onlineDownloadTasks.Unlock()
+	broadcastDownloadTaskChange()
 	return id
 }
 
@@ -1496,18 +1987,22 @@ func getOnlineDownloadTask(id string) (onlineDownloadTask, bool) {
 
 func updateOnlineDownloadTask(id string, updater func(task *onlineDownloadTask)) {
 	onlineDownloadTasks.Lock()
-	defer onlineDownloadTasks.Unlock()
 	task, ok := onlineDownloadTasks.items[id]
 	if !ok {
+		onlineDownloadTasks.Unlock()
 		return
 	}
 	updater(task)
 	task.UpdatedAt = time.Now()
+	onlineDownloadTasks.Unlock()
+	// Notify SSE subscribers after the write lock is released, so
+	// concurrent subscribers can re-acquire the read lock and snapshot
+	// the post-mutation state without contending with us.
+	broadcastDownloadTaskChange()
 }
 
 func deleteOnlineDownloadTask(id string) {
 	onlineDownloadTasks.Lock()
-	defer onlineDownloadTasks.Unlock()
 	task, ok := onlineDownloadTasks.items[id]
 	if ok {
 		if task.FilePath != "" {
@@ -1515,17 +2010,28 @@ func deleteOnlineDownloadTask(id string) {
 		}
 		delete(onlineDownloadTasks.items, id)
 	}
+	onlineDownloadTasks.Unlock()
+	if ok {
+		broadcastDownloadTaskChange()
+	}
 }
 
-func cleanupExpiredOnlineDownloadTasksLocked(now time.Time) {
+// cleanupExpiredOnlineDownloadTasksLocked removes tasks whose
+// UpdatedAt is older than onlineDownloadTaskTTL. Returns the number
+// of tasks removed so the caller can broadcast a change event after
+// releasing the write lock.
+func cleanupExpiredOnlineDownloadTasksLocked(now time.Time) int {
+	removed := 0
 	for id, task := range onlineDownloadTasks.items {
 		if now.Sub(task.UpdatedAt) > onlineDownloadTaskTTL {
 			if task.FilePath != "" {
 				_ = os.Remove(task.FilePath)
 			}
 			delete(onlineDownloadTasks.items, id)
+			removed++
 		}
 	}
+	return removed
 }
 
 func setOnlineDownloadTaskFailed(taskID string, err error) {
@@ -1539,56 +2045,116 @@ func runOnlineDownloadTask(taskID string, songSource string, normalized map[stri
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
 
-	updateOnlineDownloadTask(taskID, func(task *onlineDownloadTask) {
-		task.Status = "resolving"
-		task.Progress = 0
-	})
-
-	resolvedURL, _, resolvedHeaders, err := resolveOnlineDownloadURL(ctx, songSource, normalized, quality)
+	candidates, err := loadEnabledSourcesForSong(songSource)
 	if err != nil {
-		setOnlineDownloadTaskFailed(taskID, err)
+		setOnlineDownloadTaskFailed(taskID, fmt.Errorf("加载音源失败: %w", err))
+		return
+	}
+	if len(candidates) == 0 {
+		setOnlineDownloadTaskFailed(taskID, fmt.Errorf("未找到支持 %s 的启用音源脚本", songSource))
 		return
 	}
 
-	fileName := onlineDownloadFileName(normalized, quality, resolvedURL)
-	updateOnlineDownloadTask(taskID, func(task *onlineDownloadTask) {
-		task.Status = "downloading"
-		task.Progress = 0
-	})
+	// markResolving transitions the task into the "resolving" state with
+	// the given candidate's display name. Called once per candidate so the
+	// UI can show "ikun[赞助]… 解析中…" / "wyymusic… 解析中…" as we cycle
+	// through fallbacks.
+	markResolving := func(displayName string) {
+		updateOnlineDownloadTask(taskID, func(task *onlineDownloadTask) {
+			task.Status = "resolving"
+			task.Progress = 0
+			task.Received = 0
+			task.Total = 0
+			task.SourceName = displayName
+		})
+		broadcastDownloadTaskChange()
+	}
 
-	result, err := fetchOnlineDownloadToTempFile(ctx, resolvedURL, fileName, resolvedHeaders, func(received, total int64) {
+	// Pre-populate the resolving state with the first candidate so the
+	// very first progress poll already shows a meaningful name.
+	markResolving(candidates[0].Name)
+
+	var attemptErrors []string
+	for i, candidate := range candidates {
+		// Update the displayed candidate name each time we move on to the
+		// next resolver. This covers the post-fallback "downloading just
+		// failed, going back to resolving" transition cleanly.
+		markResolving(candidate.Name)
+
+		resolvedURL, resolvedHeaders, sourceName, resolveErr := resolveOnlineDownloadURLWithProgress(ctx, candidate, songSource, normalized, quality)
+		if resolveErr != nil {
+			attemptErrors = append(attemptErrors, fmt.Sprintf("%s 解析失败: %v", sourceName, resolveErr))
+			log.Info(ctx, "Online browser download resolve failed, trying next candidate", "task", taskID, "candidate", sourceName, "err", resolveErr)
+			if ctx.Err() != nil {
+				setOnlineDownloadTaskFailed(taskID, ctx.Err())
+				return
+			}
+			// Reset progress for the next candidate.
+			continue
+		}
+
+		fileName := onlineDownloadFileName(normalized, quality, resolvedURL)
 		updateOnlineDownloadTask(taskID, func(task *onlineDownloadTask) {
 			task.Status = "downloading"
-			task.Received = received
-			task.Total = total
-			if total > 0 {
-				p := int((received * 100) / total)
-				if p > 99 {
-					p = 99
-				}
-				if p < 0 {
-					p = 0
-				}
-				task.Progress = p
-			} else {
-				task.Progress = 0
-			}
+			task.Progress = 0
+			task.Received = 0
+			task.Total = 0
+			// Lock in the candidate we are about to stream from.
+			task.SourceName = sourceName
 		})
-	})
-	if err != nil {
-		setOnlineDownloadTaskFailed(taskID, err)
-		return
+		broadcastDownloadTaskChange()
+
+		result, fetchErr := fetchOnlineDownloadToTempFile(ctx, resolvedURL, fileName, resolvedHeaders, func(received, total int64) {
+			updateOnlineDownloadTask(taskID, func(task *onlineDownloadTask) {
+				task.Status = "downloading"
+				task.Received = received
+				task.Total = total
+				if total > 0 {
+					p := int((received * 100) / total)
+					if p > 99 {
+						p = 99
+					}
+					if p < 0 {
+						p = 0
+					}
+					task.Progress = p
+				} else {
+					task.Progress = 0
+				}
+			})
+		})
+		if fetchErr == nil {
+			updateOnlineDownloadTask(taskID, func(task *onlineDownloadTask) {
+				task.Status = "completed"
+				task.Progress = 100
+				task.Received = result.Size
+				task.Total = result.Size
+				task.FilePath = result.FilePath
+				task.FileName = result.FileName
+				task.ContentType = result.ContentType
+			})
+			broadcastDownloadTaskChange()
+			return
+		}
+
+		// Download failed for this candidate. If the user/stall detector
+		// canceled us, honor that and bail out.
+		if ctx.Err() != nil {
+			setOnlineDownloadTaskFailed(taskID, ctx.Err())
+			return
+		}
+
+		attemptErrors = append(attemptErrors, fmt.Sprintf("%s 下载失败: %v", sourceName, fetchErr))
+		log.Warn(ctx, "Online browser download failed, trying next candidate", "task", taskID, "candidate", sourceName, "err", fetchErr)
+
+		// Strip any orphaned .part file from the failed attempt so the
+		// next candidate starts clean. fetchOnlineDownloadToTempFile
+		// already cleans up its own tempFile on error, so this is
+		// defensive only.
+		_ = i
 	}
 
-	updateOnlineDownloadTask(taskID, func(task *onlineDownloadTask) {
-		task.Status = "completed"
-		task.Progress = 100
-		task.Received = result.Size
-		task.Total = result.Size
-		task.FilePath = result.FilePath
-		task.FileName = result.FileName
-		task.ContentType = result.ContentType
-	})
+	setOnlineDownloadTaskFailed(taskID, fmt.Errorf("所有启用音源均解析或下载失败: %s", strings.Join(attemptErrors, "; ")))
 }
 
 type fetchedOnlineTempFile struct {

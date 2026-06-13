@@ -544,17 +544,17 @@ const OnlineSetting = () => {
                 <div className={classes.settingsTitle}>
                     <MdFolder className={classes.titleIcon} size={20} />
                     <Typography variant="h6">
-                        {translate('online.downloadPathTitle', { _: '下载路径设置' })}
+                        {translate('online.downloadPathTitle', { _: 'Download Path Settings' })}
                     </Typography>
                 </div>
                 <TextField
                     className={classes.settingsField}
                     variant="outlined"
                     size="small"
-                    label={translate('online.downloadPathLabel', { _: '下载路径' })}
+                    label={translate('online.downloadPathLabel', { _: 'Download Path' })}
                     value={downloadPath}
                     onChange={(event) => setDownloadPath(event.target.value)}
-                    placeholder={translate('online.downloadPathPlaceholder', { _: '请输入下载路径' })}
+                    placeholder={translate('online.downloadPathPlaceholder', { _: 'Enter download path' })}
                 />
                 <div className={classes.saveButtonWrap}>
                     <Button
@@ -564,7 +564,7 @@ const OnlineSetting = () => {
                         onClick={handleSaveDownloadPath}
                         disabled={savingDownloadPath}
                     >
-                        {translate('online.saveDownloadPath', { _: '保存' })}
+                        {translate('online.saveDownloadPath', { _: 'Save' })}
                     </Button>
                 </div>
             </div>
@@ -572,11 +572,11 @@ const OnlineSetting = () => {
             <div className={classes.pageTitle}>
                 <MdSettings className={classes.titleIcon} size={20} />
                 <Typography variant="h6">
-                    {translate('online.title', { _: '自定义在线源(Lx Source)' })}
+                    {translate('online.title', { _: 'Custom Online Sources (Lx Source)' })}
                 </Typography>
             </div>
             <Typography variant="body2" className={classes.subtitle}>
-                {translate('online.subtitle', { _: '管理和配置第三方音乐脚本,支持lxmusic' })}
+                {translate('online.subtitle', { _: 'Manage and configure third-party music scripts (lxmusic supported)' })}
             </Typography>
 
             <div className={classes.addButtonWrap}>
@@ -594,7 +594,7 @@ const OnlineSetting = () => {
                     startIcon={<MdAdd />}
                     onClick={handlePickUpload}
                 >
-                    {translate('online.manageOrAdd', { _: '添加' })}
+                    {translate('online.manageOrAdd', { _: 'Add' })}
                 </Button>
             </div>
 
@@ -626,7 +626,7 @@ const OnlineSetting = () => {
                                         {item.enabled && (
                                             <Chip
                                                 size="small"
-                                                label={translate('online.enabled', { _: '已启用' })}
+                                                label={translate('online.enabled', { _: 'Enabled' })}
                                                 className={classes.statusEnabled}
                                             />
                                         )}
@@ -639,7 +639,7 @@ const OnlineSetting = () => {
                                         <Chip
                                             size="small"
                                             icon={<MdCheckCircle size={14} />}
-                                            label={item.status || translate('online.healthy', { _: '正常' })}
+                                            label={item.status || translate('online.healthy', { _: 'Healthy' })}
                                             className={classes.statusHealthy}
                                         />
                                     </div>
@@ -668,8 +668,8 @@ const OnlineSetting = () => {
                                     onClick={() => handleToggle(item)}
                                 >
                                     {item.enabled
-                                        ? translate('online.disable', { _: '禁用' })
-                                        : translate('online.enable', { _: '启用' })}
+                                        ? translate('online.disable', { _: 'Disable' })
+                                        : translate('online.enable', { _: 'Enable' })}
                                 </Button>
                                 <IconButton className={classes.deleteBtn} onClick={() => handleDelete(item)}>
                                     <MdDeleteOutline />

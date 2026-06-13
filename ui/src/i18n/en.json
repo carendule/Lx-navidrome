@@ -612,6 +612,10 @@
       "none": "None"
     },
     "settings": "Settings",
+    "onlineSettings": "Online Settings",
+    "onlineSearch": "Online Search",
+    "download": "Downloads",
+    "online": "Online",
     "version": "Version",
     "theme": "Theme",
     "personal": {
@@ -637,6 +641,32 @@
     "playlists": "Playlists",
     "sharedPlaylists": "Shared Playlists",
     "about": "About"
+  },
+  "online": {
+    "title": "Custom Online Sources (Lx Source)",
+    "subtitle": "Manage and configure third-party music scripts (lxmusic supported)",
+    "downloadPathTitle": "Download Path Settings",
+    "downloadPathLabel": "Download Path",
+    "downloadPathPlaceholder": "Enter download path",
+    "saveDownloadPath": "Save",
+    "manageOrAdd": "Add",
+    "enabled": "Enabled",
+    "healthy": "Healthy",
+    "disable": "Disable",
+    "enable": "Enable",
+    "search": {
+      "button": "Search",
+      "hotSearch": "Trending Searches",
+      "hotEmpty": "No trending data",
+      "refreshHot": "Refresh Trending"
+    }
+  },
+  "downloadList": {
+    "retryAll": "Retry All",
+    "cancelAll": "Cancel All",
+    "clearCompleted": "Clear Completed",
+    "clearFailed": "Clear Failed",
+    "totalProgress": "Total Progress"
   },
   "player": {
     "playListsText": "Play Queue",
