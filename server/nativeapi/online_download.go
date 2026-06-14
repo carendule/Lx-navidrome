@@ -478,6 +478,30 @@ process.stdin.on('end', async () => {
     enumerable: true,
   });
 
+  // 脚本期望一个对象参数：{ action, source, info }。两个 action 共用
+  // 同一个 request 处理器：musicUrl 拿下载链接，lyric 拿歌词文本。
+  // 脚本如果不支持 lyric action，requestHandler 可能会抛错；我们对
+  // 这种情况做静默降级，由 Go 端把它当作"无歌词"处理。
+  //
+  // IMPORTANT: requestedAction and info MUST be declared
+  // OUTSIDE the outer try block. In strict-mode JavaScript
+  // const/let are block-scoped, so a const declared inside
+  // the try block is not visible inside the matching catch
+  // block. Without this, the lyric_unsupported branch in
+  // the catch throws ReferenceError: requestedAction is
+  // not defined and the entire script path silently
+  // breaks for the lyric case (the bug the user reported
+  // in navidrome.log line lyric:node-failed). The values
+  // are independent of the script's init phase so it's
+  // safe to compute them up here.
+  const requestedAction = (payload && payload.action) === 'lyric' ? 'lyric' : 'musicUrl';
+  const info = decontextify({
+    musicInfo: payload.musicInfo || {},
+    quality: payload.quality,
+    type: payload.quality,
+  });
+  let inputData = { action: requestedAction, source: payload.source, info: info };
+
   try {
     vm.runInContext(payload.script, vm.createContext(sandbox), {
       filename: 'online_download_source.js',
@@ -496,18 +520,6 @@ process.stdin.on('end', async () => {
       throw new Error('当前脚本未注册 request 处理器');
     }
 
-		const info = decontextify({
-			musicInfo: payload.musicInfo || {},
-			quality: payload.quality,
-			type: payload.quality,
-		});
-
-    // 脚本期望一个对象参数：{ action, source, info }。两个 action 共用
-    // 同一个 request 处理器：musicUrl 拿下载链接，lyric 拿歌词文本。
-    // 脚本如果不支持 lyric action，requestHandler 可能会抛错；我们对
-    // 这种情况做静默降级，由 Go 端把它当作"无歌词"处理。
-    const requestedAction = (payload && payload.action) === 'lyric' ? 'lyric' : 'musicUrl';
-    let inputData = { action: requestedAction, source: payload.source, info: info };
     if (allowUnsafe) {
       inputData = JSON.parse(JSON.stringify(inputData));
     }
@@ -771,11 +783,11 @@ func (api *Router) onlineBrowserDownload(w http.ResponseWriter, r *http.Request)
 			// concurrent downloads.
 			coverRef := fetchAndPersistOnlineCover(embedCtx, downloadDir, "stream-"+filepath.Base(tempPath), normalized)
 			lyric := lookupOnlineBrowserLyricFromSongInfo(embedCtx, normalized)
-			if _, err := onlineEmbedDownloadMetadata(embedCtx, tempPath, normalized, quality, coverRef, lyric); err != nil {
+			if _, finalPath, err := onlineEmbedDownloadMetadata(embedCtx, tempPath, normalized, quality, coverRef, lyric); err != nil {
 				embedTrace(embedCtx, "browser-stream:metadata-failed", "audio", tempPath, "err", err.Error())
 				log.Error(embedCtx, "Online embed: streaming-path embed failed", "err", err)
 			} else {
-				embedTrace(embedCtx, "browser-stream:metadata-done", "audio", tempPath)
+				embedTrace(embedCtx, "browser-stream:metadata-done", "audio", finalPath)
 			}
 			onlineEmbedCleanupArtwork(downloadDir)
 		}
@@ -2350,8 +2362,18 @@ func runOnlineDownloadTask(taskID string, songSource string, normalized map[stri
 			// Best-effort cover / metadata / lyrics embed. Failure
 			// here is logged and does not affect the task status —
 			// the user always sees a playable file.
+			//
+			// onlineEmbedEnabled reads the user's settings.json
+			// embedMode field via the embed entry point's own
+			// onlineEmbedMode() call. We log a "before" trace
+			// here so the user can grep their navidrome.log for
+			// [EMBED] browser-gate-ok / browser-gate-skipped and
+			// tell whether the gate passed.
+			embedTrace(context.Background(), "browser-gate-check", "task", taskID, "songSource", songSource, "mode", onlineEmbedMode())
 			if onlineEmbedEnabled() {
 				embedOnlineBrowserTaskWithScript(ctx, taskID, nil, candidate, normalized, songSource, quality, result.FilePath)
+			} else {
+				embedTrace(context.Background(), "browser-gate-skipped-mode-none", "task", taskID, "songSource", songSource)
 			}
 			updateOnlineDownloadTask(taskID, func(task *onlineDownloadTask) {
 				task.Status = "completed"

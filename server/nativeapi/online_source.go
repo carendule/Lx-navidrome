@@ -288,6 +288,15 @@ func (api *Router) saveOnlineSourceSettings(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Trace the persisted mode so the user can grep their
+	// navidrome.log and verify the choice reached disk. The
+	// `[EMBED] settings:saved` line is the one-stop check for
+	// "did my UI selection actually persist?" — if the user
+	// picks "嵌入元数据和歌词" on the panel, hits Save, and
+	// doesn't see this line with mode=all, the request
+	// payload was wrong on the client side.
+	embedTrace(r.Context(), "settings:saved", "embedMode", settings.EmbedMode, "downloadPath", settings.DownloadPath)
+
 	writeJSON(w, settings)
 }
 

@@ -260,9 +260,12 @@ func TestOnlineEmbedDownloadMetadataFFmpegIntegration(t *testing.T) {
 		"source":    "wy",
 	}
 	ref := &onlineEmbedArtworkRef{Path: coverPath, Mime: "image/png"}
-	res, err := onlineEmbedDownloadMetadata(t.Context(), audioPath, songInfo, "320k", ref, "[00:00.00]LRC line")
+	res, finalPath, err := onlineEmbedDownloadMetadata(t.Context(), audioPath, songInfo, "320k", ref, "[00:00.00]LRC line")
 	if err != nil {
 		t.Fatalf("embed failed: %v", err)
+	}
+	if finalPath == "" {
+		t.Fatal("finalPath is empty")
 	}
 	if !res.HadCover {
 		t.Fatal("HadCover was false after embed with cover ref")
@@ -272,9 +275,20 @@ func TestOnlineEmbedDownloadMetadataFFmpegIntegration(t *testing.T) {
 	}
 
 	// ffprobe the output to confirm the title metadata round-tripped.
+	// We use a wildcard for the lyrics key: our ID3v2.4 USLT
+	// frame surfaces as `lyrics-eng=…` (the language code is
+	// part of the ffprobe key), so the test accepts either
+	// that or the bare `lyrics=…` that older ffmpegs used
+	// for the TXXX wrapper.
 	probeCmd := []string{
 		"ffprobe", "-v", "error",
-		"-show_entries", "format_tags=title:format_tags=artist:format_tags=album:format_tags=lyrics:stream_tags=title",
+		// No entry filter on format_tags because the
+		// new ID3v2.4 USLT frame surfaces as
+		// `lyrics-eng=…` (language is part of the key)
+		// and ffprobe's entry filter is exact-match.
+		// We list all format_tags and assert presence
+		// of the expected keys below.
+		"-show_entries", "format_tags:stream_tags=title",
 		"-of", "default=noprint_wrappers=1",
 		audioPath,
 	}
@@ -288,7 +302,7 @@ func TestOnlineEmbedDownloadMetadataFFmpegIntegration(t *testing.T) {
 			t.Errorf("expected %q in ffprobe output, got:\n%s", want, combined)
 		}
 	}
-	if !strings.Contains(combined, "lyrics=") {
+	if !strings.Contains(combined, "lyrics") {
 		t.Errorf("expected lyrics tag in ffprobe output, got:\n%s", combined)
 	}
 }
@@ -344,9 +358,12 @@ func TestOnlineEmbedDownloadMetadataFFmpegIntegrationExtensionless(t *testing.T)
 		"source":    "wy",
 	}
 	ref := &onlineEmbedArtworkRef{Path: coverPath, Mime: "image/png"}
-	res, err := onlineEmbedDownloadMetadata(t.Context(), audioPath, songInfo, "320k", ref, "[00:00.00]海屿你 - 马也_Crabbit")
+	res, finalPath, err := onlineEmbedDownloadMetadata(t.Context(), audioPath, songInfo, "320k", ref, "[00:00.00]海屿你 - 马也_Crabbit")
 	if err != nil {
 		t.Fatalf("embed failed: %v", err)
+	}
+	if finalPath == "" {
+		t.Fatal("finalPath is empty")
 	}
 	if !res.HadCover {
 		t.Fatal("HadCover was false after embed with cover ref")
@@ -370,7 +387,14 @@ func TestOnlineEmbedDownloadMetadataFFmpegIntegrationExtensionless(t *testing.T)
 	// verified via the format_tags and stream loop separately.
 	probeCmd := []string{
 		"ffprobe", "-v", "error",
-		"-show_entries", "format_tags=title:format_tags=artist:format_tags=album:format_tags=lyrics",
+		// We DON'T filter on `format_tags=lyrics` because
+		// the new ID3v2.4 USLT frame surfaces as
+		// `lyrics-eng=…` (language is part of the key)
+		// and ffprobe's entry-filter is exact-match, not
+		// a prefix or glob. Listing format_tags without a
+		// filter shows all keys; the test then asserts
+		// the lyrics key is present.
+		"-show_entries", "format_tags",
 		"-of", "default=noprint_wrappers=1",
 		audioPath,
 	}
@@ -383,11 +407,18 @@ func TestOnlineEmbedDownloadMetadataFFmpegIntegrationExtensionless(t *testing.T)
 		"title=海屿你",
 		"artist=马也_Crabbit",
 		"album=海屿你",
-		"lyrics=",
 	} {
 		if !strings.Contains(combined, want) {
 			t.Errorf("expected %q in ffprobe output, got:\n%s", want, combined)
 		}
+	}
+	// Lyrics: the ID3v2.4 USLT frame surfaces as
+	// `lyrics-eng=…` in ffprobe (the language is part of
+	// the key). The old TXXX wrapper also showed as
+	// `lyrics=…` — both are accepted, the test just wants
+	// a "lyrics" key to be present.
+	if !strings.Contains(combined, "lyrics") {
+		t.Errorf("expected a lyrics tag in ffprobe output, got:\n%s", combined)
 	}
 
 	// Cover check: ffprobe -show_streams lists the attached_pic
@@ -396,6 +427,11 @@ func TestOnlineEmbedDownloadMetadataFFmpegIntegrationExtensionless(t *testing.T)
 	// detailed pixel-content test is left to the existing
 	// extension test, which exercises the same path with
 	// already-extensioned input.
+	if info, err := os.Stat(audioPath); err == nil {
+		t.Logf("final file size: %d", info.Size())
+	} else {
+		t.Logf("stat err: %v", err)
+	}
 	streamCmd := []string{
 		"ffprobe", "-v", "error",
 		"-select_streams", "v",
@@ -410,6 +446,7 @@ func TestOnlineEmbedDownloadMetadataFFmpegIntegrationExtensionless(t *testing.T)
 	if !strings.Contains(string(streamOut), "codec_type=video") {
 		t.Errorf("expected a video stream (cover) in the rewritten file, got:\n%s", streamOut)
 	}
+	t.Logf("stream out:\n%s", streamOut)
 	if !strings.Contains(string(streamOut), "attached_pic=1") {
 		t.Errorf("expected attached_pic disposition on the cover stream, got:\n%s", streamOut)
 	}

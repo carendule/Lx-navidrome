@@ -40,11 +40,18 @@ import (
 // we want to tolerate before giving up and proceeding without art.
 const onlineEmbedCoverTimeout = 8 * time.Second
 
-// onlineEmbedCoverMaxBytes caps the cover image size. 8 MiB is more
-// than enough for any reasonable cover art; rejecting larger
-// responses keeps a malicious or misconfigured upstream from
-// filling the user's disk or stalling the downloader.
-const onlineEmbedCoverMaxBytes = 8 * 1024 * 1024
+// onlineEmbedCoverMaxBytes caps the cover image size we accept
+// from upstream. The previous value of 8 MiB was too aggressive:
+// 网易云's HD album scans routinely serve 10-15 MiB JPEGs and
+// 咪咕's "原始封面" / Apple Music art often tops 20 MiB. The
+// downstream path transcodes the image down to
+// onlineEmbedCoverEmbedMaxBytes (300 KB) before embedding, so
+// the in-memory size only matters for (a) the per-task disk
+// write and (b) ffmpeg's stdin on the transcode. 32 MiB is the
+// new ceiling: large enough for any source we know about, small
+// enough that a malicious or misconfigured upstream can't fill
+// the user's disk.
+const onlineEmbedCoverMaxBytes = 32 * 1024 * 1024
 
 // onlineEmbedCoverEmbedMaxBytes is the hard cap on what we put
 // into the audio file's native cover-art slot. We transcode the
@@ -94,6 +101,25 @@ func onlineEmbedArtworkDir(downloadDir string) string {
 func onlineEmbedArtworkPath(downloadDir, taskID string, mimeExt string) string {
 	return filepath.Join(onlineEmbedArtworkDir(downloadDir), taskID+mimeExt)
 }
+
+// onlineEmbedLyricTagFrame is the metadata key ffmpeg routes to
+// the lyrics tag frame on every container we target. lxserver-main
+// writes the same value via `tagger2.lyrics = lyricText` in
+// `fileCache.ts`; we use ffmpeg's `-metadata lyrics=…` flag
+// instead because ffmpeg is already a hard dependency and handles
+// the per-container frame selection for us:
+//
+//   - MP3  → ID3v2 USLT (and we force `-id3v2_version 3` so the
+//     Windows stock player surfaces it).
+//   - FLAC → Vorbis LYRICS field.
+//   - OGG  → Vorbis LYRICS field (same as FLAC; same ffmpeg code
+//     path in libavformat).
+//   - M4A  → iTunes `©lyr` atom.
+//
+// The user explicitly opted out of a sidecar `.lrc` file — tag
+// embed only. lxserver-main's `saveLyricCache` does both; we
+// keep just the tag step to match the user's stated preference.
+const onlineEmbedLyricTagFrame = "lyrics"
 
 // onlineEmbedResult is what onlineEmbedDownloadMetadata returns to
 // the caller. Errors on individual sub-steps are folded into a
@@ -195,7 +221,88 @@ func persistOnlineEmbedCover(downloadDir, taskID, mime string, body []byte) (str
 // `source` is the onlineSource that successfully resolved the
 // download (NOT songInfo.source — the two can differ for fallback
 // flows where wy's song was resolved by an ikun custom script).
+//
+// fetchOnlineEmbedLyric is the orchestrator the embed entry
+// points call. The lookup order matches what lxserver-main
+// does at runtime:
+//
+//  1. The user-supplied lx-music script FIRST, via Node.
+//     Some lx-music scripts ship a built-in lyric provider
+//     (proxies to a paid lyric API, decrypts the source's
+//     VIP-locked lyrics, etc.) that's more reliable than
+//     the public source API. lxserver-main always asks the
+//     script first and only falls back when the script
+//     returns nothing.
+//
+//  2. The Go client SECOND, hitting the public source APIs
+//     (wy/kg/kw/tx/mg). This is the lxserver-main musicSdk
+//     path, ported to Go. It covers the case where the
+//     user's lx-music script doesn't have a lyric action
+//     at all (most custom scripts don't).
+//
+// We use both because each path succeeds in different
+// scenarios: the script wins for paid/VIP-locked songs
+// (where the public source returns an empty body or a
+// code: 460 error envelope), the Go client wins for free
+// songs where the script doesn't carry a lyric handler.
 func fetchOnlineEmbedLyric(ctx context.Context, source onlineSource, songSource string, songInfo map[string]any, quality string) (string, error) {
+	// Top-of-orchestrator trace. The orchestrator is the
+	// most likely place for a silent failure (any error path
+	// returns ("", nil)), so we log the dispatch key here
+	// before any work. The user can grep this to confirm the
+	// lyric fetch was attempted at all.
+	embedTrace(ctx, "lyric:fetch-attempt", "songSource", songSource, "candidate", source.ID, "quality", quality, "hasName", stringValue(songInfo["name"]) != "", "hasSongmid", stringValue(songInfo["songmid"]) != "")
+
+	// 1) User-supplied lx-music script. The script is
+	// invoked with action='lyric' and may return a lyric
+	// string. A `success: false` response is treated as
+	// "script has no lyric handler" and we fall through to
+	// the Go client.
+	if out, ok := fetchOnlineEmbedLyricViaScriptOk(ctx, source, songSource, songInfo, quality); ok {
+		return out, nil
+	}
+
+	// 2) Go client. Handles mg / tx / kw / kg / wy. We use
+	// songSource (not source.ID) because that's the canonical
+	// source the song actually came from — `source.ID` is the
+	// *resolving* script, which can differ for fallback flows.
+	if res := fetchOnlineLyricBySource(ctx, songSource, songInfo); strings.TrimSpace(res.Lyric) != "" {
+		embedTrace(ctx, "lyric:go-client-ok", "source", songSource, "lyricLen", len(res.Lyric))
+		return res.Lyric, nil
+	}
+	// Trace the empty-result case so the user can tell
+	// whether the per-source fetcher ran but returned
+	// nothing (the [EMBED] lyric:dispatch line above will
+	// have fired with the source key) or whether the
+	// dispatcher never matched (in which case the dispatch
+	// trace will show source=… and supported=false). Both
+	// paths ran with no luck; the embed step falls through
+	// to ffmpeg without a lyrics frame.
+	embedTrace(ctx, "lyric:both-paths-empty", "source", songSource, "songName", stringValue(songInfo["name"]), "songmid", stringValue(songInfo["songmid"]))
+	return "", nil
+}
+
+// fetchOnlineEmbedLyricViaScriptOk is a thin wrapper over
+// fetchOnlineEmbedLyricViaScript that returns (string, bool)
+// so the orchestrator can tell whether the script actually
+// produced a lyric. The bool is true when the script's
+// success=true AND the lyric field is non-empty; false in
+// every other case (success: false, no-node, no-script, node
+// crashed, etc.). The wrapper exists so the orchestrator
+// can fall back to the Go client without a separate
+// "did we get a lyric" probe at the call site.
+func fetchOnlineEmbedLyricViaScriptOk(ctx context.Context, source onlineSource, songSource string, songInfo map[string]any, quality string) (string, bool) {
+	out, err := fetchOnlineEmbedLyricViaScript(ctx, source, songSource, songInfo, quality)
+	if err != nil {
+		return "", false
+	}
+	if strings.TrimSpace(out) == "" {
+		return "", false
+	}
+	return out, true
+}
+
+func fetchOnlineEmbedLyricViaScript(ctx context.Context, source onlineSource, songSource string, songInfo map[string]any, quality string) (string, error) {
 	if !commandExists("node") {
 		embedTrace(ctx, "lyric:no-node", "source", source.ID)
 		return "", nil
@@ -245,6 +352,7 @@ func fetchOnlineEmbedLyric(ctx context.Context, source onlineSource, songSource 
 	// take whichever the script emitted.
 	var resp struct {
 		Success bool   `json:"success"`
+		Error   string `json:"error"`
 		Lyric   string `json:"lyric"`
 		LRC     string `json:"lrc"`
 	}
@@ -253,7 +361,40 @@ func fetchOnlineEmbedLyric(ctx context.Context, source onlineSource, songSource 
 		return "", nil
 	}
 	if !resp.Success {
-		embedTrace(ctx, "lyric:script-said-fail", "source", source.ID, "scriptError", resp.Success)
+		// Distinguish two failure modes that previously
+		// collapsed into a single trace line:
+		//
+		//   1. The script doesn't know how to fetch lyrics
+		//      for this source (e.g. lx-music script author
+		//      never wrote a `lyric:` action). The error
+		//      string in that case is usually
+		//      "lyric_unsupported:" (the sentinel lx-music
+		//      scripts throw).
+		//   2. The script supports lyrics but the fetch
+		//      failed (network / VIP / parse error).
+		//
+		// The user has been asking why lyrics never appear
+		// in the embedded tags; the answer often turns out
+		// to be case (1) — the script is not at fault and
+		// the issue is "no source has a lyric action for
+		// this song". Tagging the failure mode in the
+		// trace makes that visible at a glance.
+		errTag := "unknown"
+		errLower := strings.ToLower(strings.TrimSpace(resp.Error))
+		switch {
+		case errLower == "":
+			errTag = "no-error-message"
+		case strings.Contains(errLower, "lyric_unsupported"),
+			strings.Contains(errLower, "unsupported"),
+			strings.Contains(errLower, "not_supported"),
+			strings.Contains(errLower, "not supported"):
+			errTag = "script-has-no-lyric-action"
+		case strings.Contains(errLower, "no lyric"),
+			strings.Contains(errLower, "not found"),
+			strings.Contains(errLower, "404"):
+			errTag = "lyric-not-found"
+		}
+		embedTrace(ctx, "lyric:script-said-fail", "source", source.ID, "errTag", errTag, "err", resp.Error)
 		return "", nil
 	}
 	out := strings.TrimSpace(resp.Lyric)
@@ -316,6 +457,37 @@ func onlineEmbedSniffAudioFormat(audioPath string) (format string, ext string) {
 	return "", ""
 }
 
+// onlineEmbedSongInfoHasAnyTag reports whether the songInfo map
+// carries at least one of the baseline metadata fields the
+// ffmpeg -metadata flags consume (title / artist / album, plus
+// the meta.songName / meta.singerName / meta.albumName fallbacks
+// the ffmpeg invocation uses). The "all" embed mode promise is
+// to embed metadata, so when this returns true we always run
+// ffmpeg even if cover and lyric both failed upstream — that
+// way the user always sees their title/artist/album in the
+// resulting file regardless of network conditions.
+//
+// Returns false for an empty / unknown songInfo, which is the
+// only legitimate "skip" case.
+func onlineEmbedSongInfoHasAnyTag(songInfo map[string]any) bool {
+	if len(songInfo) == 0 {
+		return false
+	}
+	for _, k := range []string{"name", "singer", "albumName", "songName", "singerName", "album", "albumname", "albumArtist"} {
+		if strings.TrimSpace(stringValue(songInfo[k])) != "" {
+			return true
+		}
+	}
+	if meta := mapValue(songInfo["meta"]); meta != nil {
+		for _, k := range []string{"songName", "singerName", "albumName", "album", "picUrl", "lrcUrl"} {
+			if strings.TrimSpace(stringValue(meta[k])) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // onlineEmbedDownloadMetadata runs the FFmpeg embed step on an
 // already-downloaded audio file. Returns (result, nil) on partial
 // success — when the file already plays, the embed step is purely
@@ -325,6 +497,14 @@ func onlineEmbedSniffAudioFormat(audioPath string) (format string, ext string) {
 // All errors here are best-effort and logged; callers should treat
 // (nil, err) as "metadata embed did not run" rather than "download
 // failed".
+//
+// The second return value is the (possibly renamed) audio path
+// after the embed step finishes. For mp4/m4a content the file
+// may have been renamed from `.aac` to `.m4a` to fix the
+// extension mismatch (see onlineEmbedNormalizeM4AExtension);
+// callers MUST update their task's FilePath field to the
+// returned value, otherwise the task record will point to a
+// non-existent file and the next access will fail.
 func onlineEmbedDownloadMetadata(
 	ctx context.Context,
 	audioPath string,
@@ -332,7 +512,7 @@ func onlineEmbedDownloadMetadata(
 	quality string,
 	cover *onlineEmbedArtworkRef,
 	lyric string,
-) (*onlineEmbedResult, error) {
+) (*onlineEmbedResult, string, error) {
 	result := &onlineEmbedResult{}
 	if cover != nil && cover.Path != "" {
 		result.HadCover = true
@@ -350,20 +530,32 @@ func onlineEmbedDownloadMetadata(
 	// yield a string.
 	embedTrace(ctx, "download_metadata:enter", "audio", audioPath, "coverPath", coverPathOrEmpty(cover), "lyricLen", len(lyric))
 
-	// If there's nothing to write, skip the ffmpeg invocation. This
-	// is the common path when the source script didn't return a
-	// cover URL and lyric lookup failed — there is no value in
-	// paying the ffmpeg startup cost.
-	if !result.HadCover && !result.HadLyric {
-		embedTrace(ctx, "download_metadata:skip-empty", "audio", audioPath, "reason", "no cover and no lyric")
-		return result, nil
+	// Compute whether the songInfo map has any baseline metadata
+	// worth writing. The "all" embed mode promise is to embed
+	// metadata, so even when cover/lyric both failed (the common
+	// case in restricted networks), the user's title/artist/album
+	// must still land in the file. The skip-empty branch below
+	// now only fires when cover, lyric, AND basic tags are all
+	// unavailable — i.e. songInfo was empty, which is the only
+	// case where there is genuinely nothing to write.
+	hasBasicTags := onlineEmbedSongInfoHasAnyTag(songInfo)
+
+	// If there's nothing to write, skip the ffmpeg invocation.
+	// Pre-fix this branch also covered the "no cover and no lyric"
+	// case, which silently dropped the title/artist/album embed
+	// the user explicitly asked for. The trace now reports
+	// `coverOk=false lyricOk=false hasBasicTags=true` so the user
+	// can confirm the skip was intentional (no songInfo to write).
+	if !result.HadCover && !result.HadLyric && !hasBasicTags {
+		embedTrace(ctx, "download_metadata:skip-empty", "audio", audioPath, "reason", "no cover, no lyric, no basic tags")
+		return result, audioPath, nil
 	}
 
 	ffmpegImpl := ffmpeg.New()
 	cmdPath, err := ffmpegImpl.CmdPath()
 	if err != nil {
 		embedTrace(ctx, "download_metadata:ffmpeg-missing", "audio", audioPath, "err", err.Error())
-		return result, nil
+		return result, audioPath, nil
 	}
 	embedTrace(ctx, "download_metadata:ffmpeg-found", "audio", audioPath, "cmd", cmdPath)
 
@@ -375,7 +567,7 @@ func onlineEmbedDownloadMetadata(
 	format, formatName := onlineEmbedSniffAudioFormat(audioPath)
 	if format == "" {
 		embedTrace(ctx, "download_metadata:format-unknown", "audio", audioPath, "hadCover", result.HadCover, "hadLyric", result.HadLyric)
-		return result, nil
+		return result, audioPath, nil
 	}
 	embedTrace(ctx, "download_metadata:starting-ffmpeg", "audio", audioPath, "format", format, "hadCover", result.HadCover, "hadLyric", result.HadLyric)
 
@@ -414,45 +606,42 @@ func onlineEmbedDownloadMetadata(
 	// Tag metadata. ffmpeg understands -metadata for most common
 	// tags; for MP3 it routes to ID3v2 and for FLAC it routes to
 	// Vorbis Comments automatically.
-	title := strings.TrimSpace(stringValue(songInfo["name"]))
-	artist := strings.TrimSpace(stringValue(songInfo["singer"]))
-	album := strings.TrimSpace(stringValue(songInfo["albumName"]))
-	if title == "" {
-		if meta := mapValue(songInfo["meta"]); meta != nil {
-			title = strings.TrimSpace(stringValue(meta["songName"]))
-		}
-	}
-	if artist == "" {
-		if meta := mapValue(songInfo["meta"]); meta != nil {
-			artist = strings.TrimSpace(stringValue(meta["singerName"]))
-		}
-	}
-	if album == "" {
-		if meta := mapValue(songInfo["meta"]); meta != nil {
-			album = strings.TrimSpace(stringValue(meta["albumName"]))
-		}
-	}
-	if title != "" {
-		args = append(args, "-metadata", "title="+title)
-	}
-	if artist != "" {
-		args = append(args, "-metadata", "artist="+artist)
-	}
-	if album != "" {
-		args = append(args, "-metadata", "album="+album)
-	}
-	if quality != "" {
-		args = append(args, "-metadata", "comment=Quality: "+quality)
-	}
+	onlineEmbedAppendTagMetadataArgs(&args, songInfo, quality)
 
-	if result.HadLyric {
-		// ffmpeg routes -metadata lyrics=… to the Vorbis LYRICS
-		// field on FLAC and to the ID3 USLT frame on MP3 (when
-		// -id3v2_version is the default 3/4). For M4A it lands in
-		// the ©lyr atom, which most players surface correctly.
-		args = append(args, "-metadata", "lyrics="+lyric)
-		// Force ID3v2.3 on the rewrite so older MP3 players (incl.
-		// the Windows stock player) still see the lyrics frame.
+	if result.HadLyric && format != "mp3" {
+		// For FLAC and M4A, ffmpeg writes the lyrics into
+		// the standard container-native field:
+		//
+		//   - FLAC → Vorbis `lyrics` (lowercase) — the
+		//     canonical key per the Xiph spec is `LYRICS`,
+		//     and we re-canonicalize in the post-ffmpeg Go
+		//     pass (see onlineEmbedWriteFLACLyric) because
+		//     ffmpeg always writes lowercase.
+		//   - M4A  → iTunes `©lyr` atom — no Go-side fix
+		//     needed; the atom is correct on first write.
+		//
+		// For MP3 we deliberately skip this flag. ffmpeg
+		// 8.x (and earlier, going back to 4.x) has a
+		// long-standing behavior of writing
+		// `-metadata lyrics=...` as a generic TXXX
+		// (User-defined text) frame with the description
+		// "USLT" rather than as a real USLT frame, even
+		// with `-id3v2_version 3` or 4. mp3tag on Windows
+		// does not auto-promote TXXX(USLT) to the standard
+		// "Lyrics" column, so the user sees nothing. The
+		// fix is to write a real USLT frame ourselves in a
+		// post-ffmpeg Go pass (see onlineEmbedWriteID3USLT
+		// below). Same story for the key name — ffmpeg
+		// normalizes both `lyrics` and `LYRICS` to the
+		// same TXXX wrapper, so changing the case is not a
+		// fix on its own.
+		args = append(args, "-metadata", onlineEmbedLyricTagFrame+"="+lyric)
+	}
+	if format == "mp3" {
+		// Force ID3v2.3 on the rewrite so older MP3
+		// players (incl. the Windows stock player) still
+		// see the standard tag frames. The lyric itself is
+		// written by our Go pass, not by ffmpeg.
 		args = append(args, "-id3v2_version", "3")
 	}
 
@@ -472,15 +661,53 @@ func onlineEmbedDownloadMetadata(
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		embedTrace(ctx, "download_metadata:ffmpeg-failed", "audio", audioPath, "err", err.Error(), "stderr", strings.TrimSpace(stderr.String()))
-		return result, nil
+		return result, audioPath, nil
 	}
 	embedTrace(ctx, "download_metadata:ffmpeg-ok", "audio", audioPath)
 	if err := os.Rename(tmpPath, audioPath); err != nil {
 		embedTrace(ctx, "download_metadata:rename-failed", "audio", audioPath, "err", err.Error())
-		return result, nil
+		return result, audioPath, nil
+	}
+	// Normalize the file extension for mp4/m4a content. The
+	// upstream script may have named the file with a .aac
+	// extension (matching the URL's path or the source's
+	// reported format), but the actual file content is the
+	// MP4 container with iTunes atoms. Players that
+	// associate ".aac" with raw AAC (most notably mp3tag on
+	// Windows) will refuse to read the iTunes atoms in that
+	// case and surface an empty tag list, even though the
+	// file is perfectly tagged. Renaming to .m4a makes the
+	// association unambiguous and matches what most
+	// tools (mp3tag, MusicBee, kid3, foobar2000) use to
+	// dispatch to the iTunes atom parser.
+	if format == "mp4" {
+		newPath, renErr := onlineEmbedNormalizeM4AExtension(audioPath)
+		if renErr != nil {
+			embedTrace(ctx, "download_metadata:ext-rename-failed", "audio", audioPath, "err", renErr.Error())
+		} else if newPath != "" {
+			embedTrace(ctx, "download_metadata:ext-renamed", "from", audioPath, "to", newPath)
+			audioPath = newPath
+		}
+	}
+	// Post-ffmpeg Go-side tag pass. ffmpeg can't write
+	// the lyrics in a way that mp3tag / MusicBee /
+	// foobar2000 surfaces as the standard "Lyrics" field
+	// (see the long comment above the ffmpeg `-metadata
+	// lyrics=` block for the gory details), so for MP3
+	// we open the freshly-written file and inject a real
+	// USLT frame; for FLAC we re-emit the Vorbis comment
+	// block with the canonical `LYRICS=` key. M4A is
+	// already correct (ffmpeg writes the iTunes `©lyr`
+	// atom, which the same players all read).
+	if result.HadLyric {
+		if err := onlineEmbedWriteLyricContainer(ctx, format, audioPath, lyric); err != nil {
+			embedTrace(ctx, "download_metadata:lyric-rewrite-failed", "format", format, "audio", audioPath, "err", err.Error())
+		} else {
+			embedTrace(ctx, "download_metadata:lyric-rewrite-ok", "format", format, "audio", audioPath, "lyricLen", len(lyric))
+		}
 	}
 	embedTrace(ctx, "download_metadata:done", "audio", audioPath)
-	return result, nil
+	return result, audioPath, nil
 }
 
 // embedTrace is a single funnel for embed-pipeline breadcrumbs so
@@ -541,6 +768,44 @@ func onlineEmbedCleanupArtwork(downloadDir string) {
 	_ = os.RemoveAll(onlineEmbedArtworkDir(downloadDir))
 }
 
+// onlineEmbedNormalizeM4AExtension renames a file from `.aac` to
+// `.m4a` if its current extension is `.aac`. Several sources —
+// kw most notably — return URLs ending in `.aac` even when the
+// actual content is the MP4 container with iTunes atoms.
+// Players that associate `.aac` with raw AAC (mp3tag on Windows
+// is the canonical case) then refuse to read the iTunes atoms
+// and show an empty tag list, despite the file being perfectly
+// tagged.
+//
+// Renaming to `.m4a` makes the association unambiguous. The
+// file content is unchanged (extension-only rename, no
+// re-mux).
+//
+// The call site only invokes this for `format == "mp4"`, so by
+// construction we only touch m4a-in-disguise files.
+func onlineEmbedNormalizeM4AExtension(audioPath string) (string, error) {
+	dir := filepath.Dir(audioPath)
+	base := filepath.Base(audioPath)
+	lower := strings.ToLower(base)
+	targetExt := ".m4a"
+	for _, badExt := range []string{".aac"} {
+		suffix := strings.ToLower(badExt)
+		if !strings.HasSuffix(lower, suffix) {
+			continue
+		}
+		newBase := base[:len(base)-len(suffix)] + targetExt
+		newPath := filepath.Join(dir, newBase)
+		if _, err := os.Stat(newPath); err == nil {
+			return "", fmt.Errorf("target %s already exists, leaving as-is", newPath)
+		}
+		if err := os.Rename(audioPath, newPath); err != nil {
+			return "", err
+		}
+		return newPath, nil
+	}
+	return "", nil
+}
+
 // onlineEmbedMode consults the persisted online source settings
 // and returns the embed mode the user has chosen ("none" /
 // "metadata" / "all"). Falls back to the fresh-install default
@@ -560,6 +825,52 @@ func onlineEmbedCleanupArtwork(downloadDir string) {
 // settings.json read path, and the broker is sensitive to
 // rapid repeated I/O on the same file.
 var onlineEmbedBannerOnce sync.Once
+
+// onlineEmbedAppendTagMetadataArgs reads the title/artist/
+// album from songInfo (with the meta.* fallbacks) and
+// appends the corresponding -metadata flags to args. Also
+// appends a comment=Quality: <q> flag when quality is
+// non-empty. This is the one chokepoint that decides what
+// goes into the ffmpeg -metadata block, so the embed
+// function can keep its cyclomatic complexity manageable.
+//
+// The function intentionally doesn't add the lyrics flag
+// — that decision lives in onlineEmbedDownloadMetadata
+// because the MP3 path skips ffmpeg entirely (the lyrics
+// are written by onlineEmbedWriteID3USLT in a post-ffmpeg
+// pass to avoid ffmpeg's TXXX(USLT) wrapper bug).
+func onlineEmbedAppendTagMetadataArgs(args *[]string, songInfo map[string]any, quality string) {
+	title := strings.TrimSpace(stringValue(songInfo["name"]))
+	artist := strings.TrimSpace(stringValue(songInfo["singer"]))
+	album := strings.TrimSpace(stringValue(songInfo["albumName"]))
+	if title == "" {
+		if meta := mapValue(songInfo["meta"]); meta != nil {
+			title = strings.TrimSpace(stringValue(meta["songName"]))
+		}
+	}
+	if artist == "" {
+		if meta := mapValue(songInfo["meta"]); meta != nil {
+			artist = strings.TrimSpace(stringValue(meta["singerName"]))
+		}
+	}
+	if album == "" {
+		if meta := mapValue(songInfo["meta"]); meta != nil {
+			album = strings.TrimSpace(stringValue(meta["albumName"]))
+		}
+	}
+	if title != "" {
+		*args = append(*args, "-metadata", "title="+title)
+	}
+	if artist != "" {
+		*args = append(*args, "-metadata", "artist="+artist)
+	}
+	if album != "" {
+		*args = append(*args, "-metadata", "album="+album)
+	}
+	if quality != "" {
+		*args = append(*args, "-metadata", "comment=Quality: "+quality)
+	}
+}
 
 func onlineEmbedMode() string {
 	settings, err := loadOnlineSourceSettings()
@@ -602,6 +913,11 @@ func embedOnlineServerDownloadMetadata(
 	quality string,
 	audioPath string,
 ) {
+	// Top-of-function trace: one [EMBED] line per server
+	// download attempt. If the user reports "no LYRICS tag
+	// and no [EMBED] log", this line being absent means
+	// the embed step isn't being called at all.
+	embedTrace(context.Background(), "embed:server-entry-reached", "task", task.ID, "audio", audioPath, "quality", quality, "source", candidate.ID)
 	if audioPath == "" {
 		embedTrace(ctx, "server:no-audio-path", "task", task.ID)
 		return
@@ -637,8 +953,12 @@ func embedOnlineServerDownloadMetadata(
 	// skip the round-trip in "metadata" mode because most
 	// popular lx-music scripts don't expose a lyric action and
 	// the dispatch would block ffmpeg for the full timeout
-	// window. Wiring the actual merge for "all" lands in a
-	// follow-up; for now both modes pass an empty lyric string.
+	// window. In "all" mode the lyric is written into the
+	// audio file's USLT / LYRICS / ©lyr tag frame by the
+	// ffmpeg pass below (matching lxserver-main's
+	// `tagger2.lyrics = lyricText` in fileCache.ts). The
+	// user explicitly opted out of a sidecar `.lrc` file, so
+	// we don't write one.
 	lyric := ""
 	if embedMode == embedModeAll {
 		lyric, _ = fetchOnlineEmbedLyric(embedCtx, candidate, task.Source, songInfo, quality)
@@ -652,9 +972,21 @@ func embedOnlineServerDownloadMetadata(
 		log.Info(embedCtx, "Online embed: cover fetched for task", "task", task.ID, "path", coverRef.Path, "mime", coverRef.Mime)
 	}
 
-	// 3) ffmpeg merge
-	if _, err := onlineEmbedDownloadMetadata(embedCtx, audioPath, songInfo, quality, coverRef, lyric); err != nil {
+	// 3) ffmpeg merge — writes cover (APIC), tags, and lyrics
+	// (USLT / Vorbis LYRICS / iTunes ©lyr) all in one pass.
+	// lyric is empty here in embedModeMetadata so the lyrics
+	// frame is omitted entirely. We capture the (possibly
+	// renamed) audio path and propagate it to the task
+	// record so subsequent reads / scans find the file
+	// even if the extension was changed from .aac to .m4a.
+	if _, finalPath, err := onlineEmbedDownloadMetadata(embedCtx, audioPath, songInfo, quality, coverRef, lyric); err != nil {
 		log.Error(embedCtx, "Online embed: server-mode embed failed", "task", task.ID, "err", err)
+	} else if finalPath != "" && finalPath != audioPath {
+		newPath := finalPath
+		updateOnlineDownloadTask(task.ID, func(t *onlineDownloadTask) {
+			t.FilePath = newPath
+			t.FileName = filepath.Base(newPath)
+		})
 	}
 
 	// 4) Cover artifact cleanup
@@ -682,6 +1014,19 @@ func embedOnlineBrowserTaskWithScript(
 	quality string,
 	audioPath string,
 ) {
+	// Top-of-function trace. We log here BEFORE any
+	// conditionals so the user can grep their navidrome.log
+	// for [EMBED] and see whether this function was even
+	// called for a given browser download. The trace is the
+	// first thing the function does on entry — no
+	// short-circuit above us, no caller-side gate (we get
+	// called from a go-routine spawned by the browser
+	// download code path). If the user reports "no LYRICS
+	// tag and no [EMBED] log", this line being absent means
+	// the embed step isn't being called at all (likely a
+	// caller-side bug); this line being present means the
+	// function ran and we can trace further.
+	embedTrace(context.Background(), "embed:browser-entry-reached", "task", taskID, "songSource", songSource, "candidate", candidate.ID, "audio", audioPath, "quality", quality)
 	if audioPath == "" {
 		embedTrace(ctx, "browser:no-audio-path", "task", taskID)
 		return
@@ -721,8 +1066,16 @@ func embedOnlineBrowserTaskWithScript(
 		}
 	}
 
-	if _, err := onlineEmbedDownloadMetadata(embedCtx, audioPath, songInfo, quality, coverRef, lyric); err != nil {
+	// Capture the (possibly renamed) audio path so the
+	// task record tracks the corrected extension.
+	// Browser-mode tasks live in the per-task downloader
+	// map (not the on-disk task DB), so we update the
+	// live pointer directly.
+	if _, finalPath, err := onlineEmbedDownloadMetadata(embedCtx, audioPath, songInfo, quality, coverRef, lyric); err != nil {
 		log.Error(embedCtx, "Online embed: browser-task embed failed", "task", task.ID, "err", err)
+	} else if finalPath != "" && finalPath != audioPath {
+		task.FilePath = finalPath
+		task.FileName = filepath.Base(finalPath)
 	}
 
 	onlineEmbedCleanupArtwork(downloadDir)
