@@ -1,0 +1,229 @@
+# Dockerfile.lx — Lx-Navidrome (the fork) Docker image.
+#
+# This is a leaner alternative to the upstream multi-platform
+# Dockerfile. It builds a single-arch (linux/amd64) image for
+# the host's native architecture, which is the typical case
+# for self-hosted navidrome deployments. If you need
+# multi-arch (arm64 / armv7), use the upstream `Dockerfile`
+# directly — the Lx-Navidrome team doesn't ship official
+# arm images.
+#
+# Build environment expectations (handled by `scripts/build-docker.sh`):
+#   - The `ui/build/` directory must already be populated
+#     (`ui/embed.go` does `//go:embed build/*`, so the Go
+#     compile fails if there's no `ui/build/index.html`).
+#   - The repo at the build context root must include the
+#     `go.mod` / `go.sum`, the `main.go` + `cmd/` tree, and
+#     the `ui/embed.go` + `ui/build/` directory.
+#   - Docker BuildKit (DOCKER_BUILDKIT=1) is required for
+#     the --mount=type=cache and --mount=type=bind syntax
+#     used below.
+#
+# Runtime expectations (handled in the final image):
+#   - ffmpeg is required for the embed pipeline (cover
+#     resize, USLT post-pass, transcoding fallback). mpv
+#     is NOT bundled — it's a client-side concern.
+#   - libwebp is required for native WebP encoding via
+#     dlopen (the binary is dynamically linked and looks
+#     for libwebp.so at runtime). We symlink the versioned
+#     .so.N files to unversioned .so so the dlopen lookup
+#     matches the binary's expectation.
+#   - The binary binds to $ND_PORT (default 4533). We
+#     expose that port and persist /data and /music as
+#     volumes.
+
+########################################################################################################################
+### Stage 1: build the Go binary.
+### Single-arch build, no xx cross-compile, no osxcross — the
+### upstream Dockerfile uses those for multi-arch; we don't.
+FROM golang:1.26-bookworm AS build
+
+# CGO is required for sqlite_fts5 and taglib. The two build
+# tags are enforced by const declarations in main.go that
+# reference conf/buildtags.NETGO and conf/buildtags.SQLITE_FTS5,
+# so a missing tag surfaces as an "undefined" error rather
+# than a silent runtime failure.
+ARG TARGETARCH=amd64
+ARG GIT_SHA=unknown
+ARG GIT_TAG=lx-snapshot
+
+WORKDIR /src
+
+# Copy the go module manifests first so the dependency layer
+# is cacheable independent of the source. The /go/pkg/mod
+# cache is mounted from the host so repeated builds reuse
+# downloaded modules.
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+# Copy the rest of the source. The build context should
+# include ui/build/ — see scripts/build-docker.sh for how
+# the script ensures this.
+COPY . .
+
+# The library headers are the only C deps we need at
+# build time. The libc6-dev package pulls in the rest.
+# `file` is needed for the dynamic-link sanity check
+# below — the upstream `golang:1.26-bookworm` image
+# doesn't ship it by default.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libc6-dev \
+        gcc \
+        zlib1g-dev \
+        file && \
+    rm -rf /var/lib/apt/lists/*
+
+# Build the binary. The `-linkmode=external` + `cc` combo
+# produces a dynamically-linked ELF (so libwebp can be
+# dlopen'd at runtime). `-w -s` strips debug info to keep
+# the image small. The consts.gitSha / consts.gitTag
+# overrides make `navidrome --version` report the right
+# SHA and tag in the runtime image.
+#
+# GOARM is set to 7 by default; override at build time
+# for older 32-bit ARM targets.
+ARG GOARM=7
+ENV GOARM=${GOARM} \
+    CGO_ENABLED=1 \
+    GOOS=linux
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go build \
+        -tags=netgo,sqlite_fts5 \
+        -trimpath \
+        -ldflags="-w -s \
+            -X github.com/navidrome/navidrome/consts.gitSha=${GIT_SHA} \
+            -X github.com/navidrome/navidrome/consts.gitTag=${GIT_TAG}" \
+        -o /out/navidrome .
+
+# Sanity check: a static binary can't dlopen libwebp.
+# Fail the build if the linker dropped the dynamic section
+# (the upstream Dockerfile does the same check).
+RUN file /out/navidrome | grep -q "dynamically linked" || \
+    (echo "ERROR: /out/navidrome is not dynamically linked" && \
+     file /out/navidrome && exit 1)
+
+########################################################################################################################
+### Stage 2: final runtime image.
+### Alpine is too aggressive for libwebp dlopen in some
+### configurations; Debian-slim is ~80MB and has every
+### codec we need packaged. Upstream uses alpine; we use
+### debian-slim for parity with the host glibc and to
+### avoid the musl-vs-glibc shared-library confusion.
+FROM debian:bookworm-slim AS final
+
+LABEL maintainer="conor" \
+      org.opencontainers.image.source="https://github.com/conor/lx-navidrome" \
+      org.opencontainers.image.title="Lx-Navidrome" \
+      org.opencontainers.image.description="Self-hosted music server with online-source embed (fork of navidrome)"
+
+# Runtime deps:
+#   - ffmpeg: hard dep for the embed pipeline.
+#   - libwebp + libwebpdemux + libwebpmux: native WebP
+#     encoding via purego/dlopen. The versioned .so files
+#     get symlinked to unversioned .so so the binary's
+#     dlopen lookup matches. Same pattern as upstream.
+#   - ca-certificates: HTTPS for the online-source
+#     fetchers (lyric APIs, cover image CDN).
+#   - sqlite3 CLI: optional, useful for ad-hoc inspection
+#     of the data dir from inside the container.
+#   - nodejs: the ScriptExecutor in script_executor.go
+#     prefers Node.js for running user-supplied lx-music
+#     scripts (it has fetch / streams / etc. that goja's
+#     polyfill doesn't). When node is missing the executor
+#     falls back to a goja (pure-Go JS runtime) sandbox,
+#     but a number of common lx-music scripts depend on
+#     Node-specific globals and will fail under goja. We
+#     bundle Node v24 LTS (matches .nvmrc) so the
+#     preferred-path runs the same as the user's dev env.
+#     Install via NodeSource so we get v24 specifically
+#     rather than whatever Debian's default is (Debian
+#     bookworm ships node 18, which is too old for some
+#     lx-music scripts that rely on top-level await,
+#     AbortSignal.any(), etc.).
+#   - tini: signal forwarding so SIGTERM from `docker stop`
+#     reaps the navidrome process cleanly instead of
+#     leaving zombies.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        ffmpeg \
+        libwebp7 \
+        libwebpdemux2 \
+        libwebpmux3 \
+        sqlite3 \
+        tini && \
+    rm -rf /var/lib/apt/lists/* && \
+    # Install Node.js v24 (matches .nvmrc). NodeSource's
+    # setup script is the standard way to pin a Node
+    # version on Debian; the apt repo gets refreshed once
+    # then the install is a single `apt install`.
+    curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/* && \
+    # Sanity check: node must be on PATH. If the
+    # install above silently failed (e.g. network
+    # blocked) we'd rather fail the build now than at
+    # runtime when the first song download hits a
+    # "node: not found" error.
+    node --version
+
+# Detect the runtime architecture for the libwebp
+# symlink. Debian uses a triplet directory
+# (x86_64-linux-gnu, aarch64-linux-gnu, etc.) under
+# /usr/lib. The native binary looks for the unversioned
+# .so (libwebp.so) at dlopen time; apt installs the
+# versioned .so.N only.
+ARG TARGETARCH
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+        amd64)  triplet=x86_64-linux-gnu ;; \
+        arm64)  triplet=aarch64-linux-gnu ;; \
+        arm)    triplet=arm-linux-gnueabihf ;; \
+        386)    triplet=i386-linux-gnu ;; \
+        *)      triplet=x86_64-linux-gnu ;; \
+    esac; \
+    mkdir -p /usr/lib/${triplet}; \
+    for lib in libwebp libwebpdemux libwebpmux; do \
+        so=$(ls /usr/lib/${triplet}/$lib.so.* 2>/dev/null | head -1 || true); \
+        if [ -n "$so" ]; then \
+            ln -sf "$so" /usr/lib/${triplet}/$lib.so; \
+        fi; \
+    done
+
+# Copy the binary from the build stage.
+COPY --from=build /out/navidrome /app/navidrome
+
+# Standard navidrome layout: /data for the SQLite DB +
+# cache + plugins, /music for the music library. The
+# defaults baked into the binary point at these paths
+# when ND_DATAFOLDER and ND_MUSICFOLDER are set.
+VOLUME ["/data", "/music"]
+
+# Default env. ND_PORT can be overridden at `docker run`
+# with `-e ND_PORT=...` or via docker-compose.
+ENV ND_MUSICFOLDER=/music \
+    ND_DATAFOLDER=/data \
+    ND_CONFIGFILE=/data/navidrome.toml \
+    ND_PORT=4533 \
+    ND_ENABLEWEBPENCODING=true \
+    ND_LOGLEVEL=info \
+    PATH="/app:${PATH}"
+
+# Marker file so the binary can detect "running under
+# Docker" and tweak log output (e.g. disable ANSI color).
+RUN touch /.nddockerenv
+
+# tini reaps zombies and forwards signals properly. Without
+# it, a SIGTERM from `docker stop` is delivered to the
+# navidrome process directly, but any goroutine that
+# doesn't handle it cleanly leaves zombies that the
+# container runtime can't clean up. tini wraps navidrome
+# so the signal path is well-behaved.
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/navidrome"]
+
+EXPOSE 4533

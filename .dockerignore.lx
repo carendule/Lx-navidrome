@@ -1,0 +1,69 @@
+# .dockerignore.lx — used by the Lx-Navidrome build script
+# alongside Dockerfile.lx.
+#
+# The upstream `.dockerignore` (at the repo root) excludes
+# ui/build/ on the theory that the Dockerfile's `ui` stage
+# rebuilds the UI. Our Dockerfile.lx is single-stage and
+# uses `//go:embed build/*` so the build directory must
+# ship with the build context. We therefore override the
+# rule for ui/build/ and exclude a different set of
+# artifacts that aren't needed at build or runtime.
+
+.DS_Store
+
+# We need ui/build/index.html for `//go:embed build/*` in
+# ui/embed.go, so DO NOT ignore it. The upstream
+# .dockerignore excludes ui/build/ — we override that here.
+
+# Editor / IDE artifacts
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local build outputs that don't go into the image
+binaries/
+dist/
+navidrome          # the locally-built binary
+navidrome.exe
+*.db
+*.sqlite3
+testDB/
+data/             # user data dir
+cache/            # user cache dir
+music/            # user music dir
+music.old/
+tmp/              # user tmp dir (NOT the build-tmp; that's in /tmp)
+!tmp/taglib
+
+# Generated but rebuildable
+xx/               # the xx cross-compile tool (only used by upstream Dockerfile)
+osxcross/         # the osxcross toolchain (only used by upstream Dockerfile)
+
+# Docker config
+Dockerfile
+docker-compose*.yml
+
+# CI / Git
+.github/
+.git/
+.gitattributes
+.gitignore
+.gitkeep
+
+# Test artifacts
+*.out
+*.test
+*.coverprofile
+coverage.txt
+
+# Docs (kept in the repo but not in the image)
+*.md
+LICENSE
+CONTRIBUTING.md
+CODE_OF_CONDUCT.md
+docs/
+
+# Build-tool caches that the build re-fetches anyway
+.cache/
+.gocache/

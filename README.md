@@ -1,88 +1,67 @@
-<a href="https://www.navidrome.org"><img src="resources/logo-192x192.png" alt="Navidrome logo" title="navidrome" align="right" height="60px" /></a>
+<a href="https://github.com/navidrome/navidrome"><img src="resources/logo-192x192.png" alt="Lx-Navidrome logo" title="lx-navidrome" align="right" height="60px" /></a>
 
-# Navidrome Music Server &nbsp;[![Tweet](https://img.shields.io/twitter/url/http/shields.io.svg?style=social)](https://twitter.com/intent/tweet?text=Tired%20of%20paying%20for%20music%20subscriptions%2C%20and%20not%20finding%20what%20you%20really%20like%3F%20Roll%20your%20own%20streaming%20service%21&url=https://navidrome.org&via=navidrome)
+# Lx-Navidrome Music Server
 
-[![Last Release](https://img.shields.io/github/v/release/navidrome/navidrome?logo=github&label=latest&style=flat-square)](https://github.com/navidrome/navidrome/releases)
-[![Build](https://img.shields.io/github/actions/workflow/status/navidrome/navidrome/pipeline.yml?branch=master&logo=github&style=flat-square)](https://nightly.link/navidrome/navidrome/workflows/pipeline/master)
-[![Downloads](https://img.shields.io/github/downloads/navidrome/navidrome/total?logo=github&style=flat-square)](https://github.com/navidrome/navidrome/releases/latest)
-[![Docker Pulls](https://img.shields.io/docker/pulls/deluan/navidrome?logo=docker&label=pulls&style=flat-square)](https://hub.docker.com/r/deluan/navidrome)
-[![Dev Chat](https://img.shields.io/discord/671335427726114836?logo=discord&label=discord&style=flat-square)](https://discord.gg/xh7j7yF)
-[![Subreddit](https://img.shields.io/reddit/subreddit-subscribers/navidrome?logo=reddit&label=/r/navidrome&style=flat-square)](https://www.reddit.com/r/navidrome/)
-[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-v2.0-ff69b4.svg?style=flat-square)](CODE_OF_CONDUCT.md)
-[![Gurubase](https://img.shields.io/badge/Gurubase-Ask%20Navidrome%20Guru-006BFF?style=flat-square)](https://gurubase.io/g/navidrome)
+> 🎵 **Navidrome × LX Music** — 将本地音乐库管理与多平台在线音源聚合融为一体的自托管音乐服务
 
-Navidrome is an open source web-based music collection server and streamer. It gives you freedom to listen to your
-music collection from any browser or mobile device. It's like your personal Spotify!
+[![基于 Navidrome](https://img.shields.io/badge/based%20on-Navidrome-4EACD5?style=flat-square&logo=github)](https://github.com/navidrome/navidrome)
+[![LX Music](https://img.shields.io/badge/integrated-LX%20Music-FF6B6B?style=flat-square)](https://github.com/lyswhut/lx-music-desktop)
+[![License](https://img.shields.io/github/license/your-username/lx-navidrome?style=flat-square)](LICENSE)
+[![Build](https://img.shields.io/github/actions/workflow/status/your-username/lx-navidrome/pipeline.yml?branch=master&logo=github&style=flat-square)](https://github.com/your-username/lx-navidrome/actions)
+[![Docker Pulls](https://img.shields.io/docker/pulls/your-dockerhub/lx-navidrome?logo=docker&label=pulls&style=flat-square)](https://hub.docker.com/r/your-dockerhub/lx-navidrome)
 
+Lx-Navidrome 是一个基于 [Navidrome](https://github.com/navidrome/navidrome) 的增强版自托管音乐服务器，深度集成了 [LX Music（洛雪音乐）](https://github.com/lyswhut/lx-music-desktop) 的在线功能。你不仅可以管理和串流本地音乐库，还可以通过 LX Music 自定义音源直接在 Web 界面中搜索、播放来自多个主流音乐平台的在线曲目。
 
-**Note**: The `master` branch may be in an unstable or even broken state during development. 
-Please use [releases](https://github.com/navidrome/navidrome/releases) instead of 
-the `master` branch in order to get a stable set of binaries.
+> ⚠️ **声明**：本项目仅供个人学习与技术研究使用，请尊重版权，勿将本项目用于任何商业用途。  
+> 🤖 **注意**：项目 90% 以上的代码由 AI 辅助完成，欢迎社区参与改进与审查。
 
-## [Check out our Live Demo!](https://www.navidrome.org/demo/)
+---
 
-__Any feedback is welcome!__ If you need/want a new feature, find a bug or think of any way to improve Navidrome, 
-please file a [GitHub issue](https://github.com/navidrome/navidrome/issues) or join the discussion in our 
-[Subreddit](https://www.reddit.com/r/navidrome/). If you want to contribute to the project in any other way 
-([ui/backend dev](https://www.navidrome.org/docs/developers/), 
-[translations](https://www.navidrome.org/docs/developers/translations/), 
-[themes](https://www.navidrome.org/docs/developers/creating-themes)), please join the chat in our 
-[Discord server](https://discord.gg/xh7j7yF). 
+## ✨ 核心功能
 
-## Installation
+### 继承自 Navidrome
+- 🗂️ 支持**超大本地音乐库**的高效管理与流式播放
+- 🎵 支持几乎**所有音频格式**的串流
+- 📋 完善的**元数据**读取与展示（专辑封面、歌词、标签等）
+- 🎼 出色的**合辑**（Various Artists）与**套装**（多碟专辑）支持
+- 👥 **多用户**模式，每位用户拥有独立的播放记录、播放列表与收藏
+- ⚡ 极低的**资源占用**
+- 🌐 **多平台**支持：macOS、Linux、Windows，提供 **Docker** 镜像
+- 📦 覆盖树莓派在内的主流平台的**开箱即用**二进制文件
+- 🔄 自动**监控音乐库**变更并更新元数据
+- 🎨 基于 [Material UI](https://material-ui.com) 的**可主题化**现代响应式 Web 界面
+- 📱 兼容所有 Subsonic / Madsonic / Airsonic [客户端](https://www.navidrome.org/docs/overview/#apps)
+- 🔉 按需**转码**，支持 Opus 编码，可按用户/播放器分别设置
+- 🌍 支持**多语言**界面
 
-See instructions on the [project's website](https://www.navidrome.org/docs/installation/)
+### 新增：LX Music 在线功能集成 🆕
+- 🔍 **在线音乐搜索**：直接在 Navidrome Web 界面中搜索多平台在线曲目
+- 📦 **自定义音源支持**：兼容 LX Music 生态的自定义 JS 音源脚本，可在线导入
+- ⬇️ **一键缓存/下载**：将在线音乐保存至本地库，与本地曲目统一管理
+- 📄 **在线歌词同步**：获取并展示在线歌词（含翻译与逐字歌词）
+- 🔗 **在线/本地统一界面**：本地库与在线音源在同一界面无缝切换
 
-## Cloud Hosting
+---
 
-[PikaPods](https://www.pikapods.com) has partnered with us to offer you an 
-[officially supported, cloud-hosted solution](https://www.navidrome.org/docs/installation/managed/#pikapods). 
-A share of the revenue helps fund the development of Navidrome at no additional cost for you.
+## 🚀 安装
 
-[![PikaPods](https://www.pikapods.com/static/run-button.svg)](https://www.pikapods.com/pods?run=navidrome)
+### Docker（推荐）
 
-## Features
- 
- - Handles very **large music collections**
- - Streams virtually **any audio format** available
- - Reads and uses all your beautifully curated **metadata**
- - Great support for **compilations** (Various Artists albums) and **box sets** (multi-disc albums)
- - **Multi-user**, each user has their own play counts, playlists, favourites, etc...
- - Very **low resource usage**
- - **Multi-platform**, runs on macOS, Linux and Windows. **Docker** images are also provided
- - Ready to use binaries for all major platforms, including **Raspberry Pi**
- - Automatically **monitors your library** for changes, importing new files and reloading new metadata 
- - **Themeable**, modern and responsive **Web interface** based on [Material UI](https://material-ui.com)
- - **Compatible** with all Subsonic/Madsonic/Airsonic [clients](https://www.navidrome.org/docs/overview/#apps)
- - **Transcoding** on the fly. Can be set per user/player. **Opus encoding is supported**
- - Translated to **various languages**
-
-## Translations
-
-Navidrome uses [POEditor](https://poeditor.com/) for translations, and we are always looking 
-for [more contributors](https://www.navidrome.org/docs/developers/translations/)
-
-<a href="https://poeditor.com/"> 
-<img height="32" src="https://github.com/user-attachments/assets/c19b1d2b-01e1-4682-a007-12356c42147c">
-</a>
-
-## Documentation
-All documentation can be found in the project's website: https://www.navidrome.org/docs. 
-Here are some useful direct links:
-
-- [Overview](https://www.navidrome.org/docs/overview/)
-- [Installation](https://www.navidrome.org/docs/installation/)
-  - [Docker](https://www.navidrome.org/docs/installation/docker/)
-  - [Binaries](https://www.navidrome.org/docs/installation/pre-built-binaries/)
-  - [Build from source](https://www.navidrome.org/docs/installation/build-from-source/)
-- [Development](https://www.navidrome.org/docs/developers/)
-- [Subsonic API Compatibility](https://www.navidrome.org/docs/developers/subsonic-api/)
-
-## Screenshots
-
-<p align="left">
-    <img height="550" src="https://raw.githubusercontent.com/navidrome/navidrome/master/.github/screenshots/ss-mobile-login.png">
-    <img height="550" src="https://raw.githubusercontent.com/navidrome/navidrome/master/.github/screenshots/ss-mobile-player.png">
-    <img height="550" src="https://raw.githubusercontent.com/navidrome/navidrome/master/.github/screenshots/ss-mobile-album-view.png">
-    <img width="550" src="https://raw.githubusercontent.com/navidrome/navidrome/master/.github/screenshots/ss-desktop-player.png">
-</p>
+```yaml
+# docker-compose.yml
+version: "3"
+services:
+  lx-navidrome:
+    image: your-dockerhub/lx-navidrome:latest
+    container_name: lx-navidrome
+    restart: unless-stopped
+    environment:
+      - ND_SCANSCHEDULE=1h
+      - ND_LOGLEVEL=info
+      - ND_SESSIONTIMEOUT=24h
+      - ND_BASEURL=""
+    volumes:
+      - "./data:/data"
+      - "./music:/music:ro"
+    ports:
+      - "4533:4533"
