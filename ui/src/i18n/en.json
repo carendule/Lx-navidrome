@@ -655,6 +655,14 @@
     "nameTemplateEmpty": "(All clips selected)",
     "nameTemplateNoneSelected": "(Drag at least one clip from the available row)",
     "nameTemplateHint": "Tip: drag chips between the two rows. The order in the selected row becomes the filename template and is saved automatically when you drop a chip.",
+    "embedModeTitle": "元数据嵌入设置",
+    "embedModeHint": "请选择下载文件是否嵌入元数据及歌词",
+    "embedModeSaving": "保存中…",
+    "embedMode": {
+      "none": "不嵌入",
+      "metadata": "仅嵌入元数据",
+      "all": "嵌入元数据和歌词"
+    },
     "manageOrAdd": "Add",
     "enabled": "Enabled",
     "healthy": "Healthy",

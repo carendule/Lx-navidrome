@@ -502,13 +502,33 @@ process.stdin.on('end', async () => {
 			type: payload.quality,
 		});
 
-    // 脚本期望一个对象参数：{ action, source, info }
-    let inputData = { action: 'musicUrl', source: payload.source, info: info };
+    // 脚本期望一个对象参数：{ action, source, info }。两个 action 共用
+    // 同一个 request 处理器：musicUrl 拿下载链接，lyric 拿歌词文本。
+    // 脚本如果不支持 lyric action，requestHandler 可能会抛错；我们对
+    // 这种情况做静默降级，由 Go 端把它当作"无歌词"处理。
+    const requestedAction = (payload && payload.action) === 'lyric' ? 'lyric' : 'musicUrl';
+    let inputData = { action: requestedAction, source: payload.source, info: info };
     if (allowUnsafe) {
       inputData = JSON.parse(JSON.stringify(inputData));
     }
     const result = await requestHandler(inputData);
-    
+
+    if (requestedAction === 'lyric') {
+      // Scripts that support a lyric handler return either a raw
+      // string (most common) or an object { lyric / lrc }. We
+      // normalize both shapes and serialize only the lyric field on
+      // stdout; the Go side reads the lyric field back.
+      const dResult = decontextify(result);
+      let lyricText = '';
+      if (typeof dResult === 'string') {
+        lyricText = dResult;
+      } else if (dResult && typeof dResult === 'object') {
+        lyricText = String(dResult.lyric || dResult.lrc || '');
+      }
+      process.stdout.write(JSON.stringify({ success: true, lyric: String(lyricText) }));
+      return;
+    }
+
 		let finalUrl = '';
 		let finalHeaders = null;
     const dResult = decontextify(result);
@@ -537,7 +557,7 @@ process.stdin.on('end', async () => {
 				finalHeaders = dResult.data.header;
 	      }
     }
-    
+
     if (!finalUrl || typeof finalUrl !== 'string') {
       console.error('[OnlineDownload] Invalid result:', JSON.stringify(dResult));
       throw new Error('脚本未返回有效下载链接');
@@ -565,7 +585,16 @@ process.stdin.on('end', async () => {
 
 		process.stdout.write(JSON.stringify({ success: true, url: finalUrl, headers: normalizedHeaders }));
   } catch (error) {
-    process.stdout.write(JSON.stringify({ success: false, error: error && error.message ? error.message : String(error) }));
+    // For lyric action, scripts that don't implement a lyric handler
+    // throw here. We surface that as success=false with a
+    // distinctive error prefix so the Go side can match it and skip
+    // silently instead of logging a warning for every song.
+    if (requestedAction === 'lyric') {
+      const msg = (error && error.message) ? String(error.message) : String(error);
+      process.stdout.write(JSON.stringify({ success: false, error: 'lyric_unsupported: ' + msg }));
+    } else {
+      process.stdout.write(JSON.stringify({ success: false, error: error && error.message ? error.message : String(error) }));
+    }
   }
 });
 `
@@ -716,7 +745,43 @@ func (api *Router) onlineBrowserDownload(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Access-Control-Expose-Headers", "X-Online-Resolved-URL, X-Online-Resolver-Source, Content-Disposition")
 
 	fileName := onlineDownloadFileName(normalized, quality, req.NameTemplate, resolvedURL)
-	if err := proxyOnlineDownload(ctx, w, r, resolvedURL, fileName, resolvedHeaders); err != nil {
+
+	// Embed hook: run cover / metadata / lyrics embedding on the
+	// downloaded temp file *before* it gets streamed back to the
+	// user's browser. We do NOT have the source script handle in
+	// this streaming path, so lyric lookup is limited to the
+	// songInfo.meta.lrcUrl fallback. Failure is logged and ignored.
+	// The hook is only registered when the user has metadata
+	// embedding enabled in settings — a noop proxy otherwise keeps
+	// the streaming path zero-overhead for users who turned it off.
+	var embedHook func(tempPath string, contentType string, size int64)
+	if onlineEmbedEnabled() {
+		embedHook = func(tempPath string, _ string, _ int64) {
+			embedCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			downloadDir := filepath.Dir(tempPath)
+			// Breadcrumb before we touch anything else. If the user
+			// only sees the legacy log.Info line below and not this
+			// [EMBED] one, they ran an older binary. The legacy line
+			// is kept for grep-compatibility.
+			embedTrace(embedCtx, "browser-stream:enter", "audio", tempPath)
+			log.Info(embedCtx, "Online embed: browser-stream embed starting", "audio", tempPath)
+			// We don't have a stable taskID here, so synthesize one
+			// for the cover artifact path to avoid clashes between
+			// concurrent downloads.
+			coverRef := fetchAndPersistOnlineCover(embedCtx, downloadDir, "stream-"+filepath.Base(tempPath), normalized)
+			lyric := lookupOnlineBrowserLyricFromSongInfo(embedCtx, normalized)
+			if _, err := onlineEmbedDownloadMetadata(embedCtx, tempPath, normalized, quality, coverRef, lyric); err != nil {
+				embedTrace(embedCtx, "browser-stream:metadata-failed", "audio", tempPath, "err", err.Error())
+				log.Error(embedCtx, "Online embed: streaming-path embed failed", "err", err)
+			} else {
+				embedTrace(embedCtx, "browser-stream:metadata-done", "audio", tempPath)
+			}
+			onlineEmbedCleanupArtwork(downloadDir)
+		}
+	}
+
+	if err := proxyOnlineDownloadWithEmbed(ctx, w, r, resolvedURL, fileName, resolvedHeaders, embedHook); err != nil {
 		log.Warn(r.Context(), "Online browser download proxy failed", "source", songSource, "resolver", sourceName, "url", resolvedURL, "err", err)
 		if w.Header().Get("Content-Type") == "" {
 			http.Error(w, err.Error(), http.StatusBadGateway)
@@ -1063,6 +1128,11 @@ func runOnlineServerDownloadTask(taskID string) {
 		result, fetchErr := downloadOnlineServerTaskToPath(attemptCtx, taskID)
 		attemptCancel()
 		if fetchErr == nil {
+			// Best-effort: cover / metadata / lyrics embed. All
+			// sub-steps log and continue on failure, so the user
+			// always gets a playable file even if ffmpeg is missing
+			// or the upstream never returned cover art.
+			embedOnlineServerDownloadMetadata(attemptCtx, task, candidate, quality, result.FilePath)
 			updateOnlineDownloadTask(taskID, func(t *onlineDownloadTask) {
 				t.Status = "completed"
 				t.Progress = 100
@@ -1384,6 +1454,23 @@ func getOnlineDownloadTaskPointer(id string) (*onlineDownloadTask, bool) {
 	return task, true
 }
 
+// isActiveServerDownloadStatus is the single source of truth for
+// "this task is still doing work, count it as active". The same
+// predicate is used by both the badge counter in the top nav and
+// the "in flight" chip in the Download_list panel, so a state that
+// we ever introduce a new variant of (e.g. "verifying") only needs
+// to be added in one place. The set is intentionally conservative:
+// anything in {queued, resolving, downloading} is in flight; once
+// a task reaches failed / completed / paused / canceled we stop
+// counting it so the badge resets cleanly.
+func isActiveServerDownloadStatus(status string) bool {
+	switch status {
+	case "queued", "resolving", "downloading":
+		return true
+	}
+	return false
+}
+
 func listOnlineServerDownloadTasks() onlineServerDownloadTasksResponse {
 	onlineDownloadTasks.RLock()
 	defer onlineDownloadTasks.RUnlock()
@@ -1411,8 +1498,18 @@ func listOnlineServerDownloadTasks() onlineServerDownloadTasksResponse {
 		}
 		tasks = append(tasks, view)
 		progressSum += task.Progress
-		if task.Status == "downloading" {
+		// ActiveCount includes every task that hasn't reached a
+		// terminal state yet — queued (waiting for a free worker),
+		// resolving (asking the source script for a URL), and
+		// downloading (streaming bytes to disk). The badge in the
+		// top nav uses this so the user sees "1 in flight" the
+		// moment they click download, not only once the file is
+		// halfway written. Terminal states (completed / failed /
+		// paused / canceled) do NOT count.
+		if isActiveServerDownloadStatus(task.Status) {
 			resp.ActiveCount++
+		}
+		if task.Status == "downloading" {
 			resp.TotalSpeed += task.Speed
 		}
 	}
@@ -2035,12 +2132,24 @@ func sanitizeOnlineFileName(name string) string {
 	return name
 }
 
-func proxyOnlineDownload(ctx context.Context, w http.ResponseWriter, _ *http.Request, targetURL string, fileName string, resolveHeaders map[string]string) error {
+func proxyOnlineDownloadWithEmbed(
+	ctx context.Context,
+	w http.ResponseWriter,
+	r *http.Request,
+	targetURL string,
+	fileName string,
+	resolveHeaders map[string]string,
+	embedHook func(tempPath string, contentType string, size int64),
+) error {
 	result, err := fetchOnlineDownloadToTempFile(ctx, targetURL, fileName, resolveHeaders, nil)
 	if err != nil {
 		return err
 	}
 	defer os.Remove(result.FilePath)
+
+	if embedHook != nil {
+		embedHook(result.FilePath, result.ContentType, result.Size)
+	}
 
 	serveFile, err := os.Open(result.FilePath)
 	if err != nil {
@@ -2238,6 +2347,12 @@ func runOnlineDownloadTask(taskID string, songSource string, normalized map[stri
 			})
 		})
 		if fetchErr == nil {
+			// Best-effort cover / metadata / lyrics embed. Failure
+			// here is logged and does not affect the task status —
+			// the user always sees a playable file.
+			if onlineEmbedEnabled() {
+				embedOnlineBrowserTaskWithScript(ctx, taskID, nil, candidate, normalized, songSource, quality, result.FilePath)
+			}
 			updateOnlineDownloadTask(taskID, func(task *onlineDownloadTask) {
 				task.Status = "completed"
 				task.Progress = 100

@@ -7,7 +7,9 @@ import {
   CardContent,
   Chip,
   Divider,
+  FormControlLabel,
   IconButton,
+  Radio,
   TextField,
   Typography,
 } from '@material-ui/core'
@@ -18,14 +20,19 @@ import {
   MdDeleteOutline,
   MdDragIndicator,
   MdFolder,
+  MdLibraryMusic,
   MdSettings,
   MdTextFields,
 } from 'react-icons/md'
 import { httpClient } from '../dataProvider'
 import {
-  NAME_TEMPLATE_TOKENS,
+  EMBED_MODE_DEFAULT,
+  EMBED_MODES,
   NAME_TEMPLATE_DEFAULT,
+  NAME_TEMPLATE_TOKENS,
+  fetchOnlineEmbedMode,
   fetchOnlineNameTemplate,
+  saveOnlineEmbedMode,
 } from './online_source_settings_api'
 
 const ONLINE_SOURCE_STATUS_CHANGED_EVENT = 'nd:online-source-status-changed'
@@ -158,6 +165,36 @@ const useStyles = makeStyles((theme) => ({
   },
   saveButtonWrap: {
     marginBottom: theme.spacing(2),
+  },
+  // 嵌入设置分区的描述文字：放在标题下方，三个 Radio 之上。
+  // 复用 templateHint 的字号但放宽宽度限制以容纳更长的句子。
+  embedHint: {
+    color: theme.palette.text.secondary,
+    marginBottom: theme.spacing(1.5),
+  },
+  // Radio 行容器：在窄屏自动换行，并保证三个 Radio 之间有可见的
+  // 间距（gap: 2 → 16px），让它们看起来不像挤在一起。
+  embedOptionRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: theme.spacing(2),
+    marginBottom: theme.spacing(1.5),
+  },
+  // 单个 Radio 容器：加底色 + 圆角让整行像一个 segmented control。
+  // 横向内边距放大到 1.6 (≈12.8px) 让 Radio 圆圈和文字之间也有
+  // 留白；选中态由 FormControlLabel 的 primary color 自动着色。
+  embedOption: {
+    border: `1px solid ${theme.palette.divider}`,
+    borderRadius: 8,
+    padding: theme.spacing(0.6, 1.6),
+    backgroundColor: 'transparent',
+    transition: 'background-color 0.15s, border-color 0.15s',
+  },
+  // 提交按钮旁的 “保存中…” spinner / 文案占位，避免布局跳动。
+  embedSaving: {
+    marginLeft: theme.spacing(1),
+    color: theme.palette.text.secondary,
+    fontSize: '0.8rem',
   },
   templateRow: {
     display: 'flex',
@@ -327,6 +364,25 @@ const shallowEqualStringArray = (a, b) => {
 // from ./online_source_settings_api so the search page can re-use
 // them and stay in sync with this page.
 
+// embedModeDefaultLabel is the *fallback* label for the embed-mode
+// radios. We only land here when the i18n catalog doesn't carry a
+// `online.embedMode.<mode>` key (e.g. the user is running the
+// embedded Chinese-only build with a translation key dropped from
+// the active locale). The Chinese labels match the user-requested
+// wording for the panel: 不嵌入 / 仅嵌入元数据 / 嵌入元数据和歌词.
+const embedModeDefaultLabel = (mode) => {
+  switch (mode) {
+    case 'none':
+      return '不嵌入'
+    case 'metadata':
+      return '仅嵌入元数据'
+    case 'all':
+      return '嵌入元数据和歌词'
+    default:
+      return mode
+  }
+}
+
 const OnlineSetting = () => {
   const classes = useStyles()
   const theme = useTheme()
@@ -342,6 +398,23 @@ const OnlineSetting = () => {
   const [nameTemplate, setNameTemplate] = React.useState(
     NAME_TEMPLATE_DEFAULT.slice(),
   )
+  // embedMode: 3-state toggle for the post-download embed pipeline.
+  //   "none"     — leave the audio file untouched.
+  //   "metadata" — write cover + tags (title / artist / album / quality).
+  //   "all"      — also write lyrics (the lyric merge ships in a
+  //                follow-up; the value is wired through and the
+  //                server treats it as "metadata" for now).
+  // The default mirrors the backend's defaultOnlineEmbedMode, but we
+  // also re-fetch on mount so the radio reflects the persisted
+  // choice on next page load.
+  const [embedMode, setEmbedMode] = React.useState(EMBED_MODE_DEFAULT)
+  const [savingEmbedMode, setSavingEmbedMode] = React.useState(false)
+  // Mirror the latest value in a ref so the async save closure
+  // (which can fire from a useEffect) doesn't read a stale state.
+  const embedModeRef = React.useRef(embedMode)
+  React.useEffect(() => {
+    embedModeRef.current = embedMode
+  }, [embedMode])
   const [draggingID, setDraggingID] = React.useState('')
   const [dragOverID, setDragOverID] = React.useState('')
   const [touchDraggingID, setTouchDraggingID] = React.useState('')
@@ -378,9 +451,11 @@ const OnlineSetting = () => {
         )
         .catch(() => ''),
       fetchOnlineNameTemplate(),
-    ]).then(([path, template]) => {
+      fetchOnlineEmbedMode(),
+    ]).then(([path, template, mode]) => {
       setDownloadPath(path)
       setNameTemplate(template)
+      setEmbedMode(mode)
       // Re-enable auto-save on the next tick so the state updates
       // we just queued don't accidentally re-POST during the same
       // tick.
@@ -545,6 +620,50 @@ const OnlineSetting = () => {
         }, 0)
       })
   }, [downloadPath, notify])
+
+  // handleEmbedModeChange is the radio onChange callback for the
+  // "元数据嵌入设置" section. The user-facing flow is:
+  //
+  //   1. User clicks a radio; we update the local state immediately
+  //      so the UI feels instant (the radio flips before the network
+  //      round-trip completes).
+  //   2. We POST the new mode; the saveOnlineEmbedMode helper
+  //      re-fetches the current downloadPath + nameTemplate and
+  //      patches only the embedMode in the payload so we never
+  //      clobber the user's other choices.
+  //   3. The server response carries the sanitized EmbedMode; if
+  //      it's different from what we just sent (e.g. a typo, a
+  //      server-side default), we snap the radio to the
+  //      server-authoritative value so the UI can never disagree
+  //      with the persisted state.
+  //
+  // We do not suspend auto-save here because the embed mode is
+  // owned entirely by this section — a concurrent chip drop can
+  // safely merge with the embed mode save in either order.
+  const handleEmbedModeChange = React.useCallback(
+    (event) => {
+      const next = event?.target?.value
+      if (!next || !EMBED_MODES.includes(next)) return
+      setEmbedMode(next)
+      embedModeRef.current = next
+      setSavingEmbedMode(true)
+      saveOnlineEmbedMode(next)
+        .then((persisted) => {
+          if (persisted && persisted !== next) {
+            setEmbedMode(persisted)
+            embedModeRef.current = persisted
+          }
+          notify('元数据嵌入设置已保存', 'info')
+        })
+        .catch(() => {
+          notify('元数据嵌入设置保存失败', 'warning')
+        })
+        .finally(() => {
+          setSavingEmbedMode(false)
+        })
+    },
+    [notify],
+  )
 
   // Self-implemented mouse drag for the name-template chips. We don't
   // use the HTML5 drag-and-drop API because MUI v4's Chip wrapper
@@ -1151,6 +1270,43 @@ const OnlineSetting = () => {
             {translate('online.saveDownloadPath', { _: 'Save' })}
           </Button>
         </div>
+      </div>
+
+      <div className={classes.settingsSection}>
+        <div className={classes.settingsTitle}>
+          <MdLibraryMusic className={classes.titleIcon} size={20} />
+          <Typography variant="h6">
+            {translate('online.embedModeTitle', {
+              _: '元数据嵌入设置',
+            })}
+          </Typography>
+        </div>
+        <Typography variant="body2" className={classes.embedHint}>
+          {translate('online.embedModeHint', {
+            _: '请选择下载文件是否嵌入元数据及歌词',
+          })}
+        </Typography>
+        <div className={classes.embedOptionRow}>
+          {EMBED_MODES.map((mode) => (
+            <FormControlLabel
+              key={mode}
+              className={classes.embedOption}
+              value={mode}
+              control={<Radio color="primary" size="small" />}
+              label={translate(`online.embedMode.${mode}`, {
+                _: embedModeDefaultLabel(mode),
+              })}
+              checked={embedMode === mode}
+              onChange={handleEmbedModeChange}
+              disabled={savingEmbedMode}
+            />
+          ))}
+        </div>
+        {savingEmbedMode && (
+          <Typography variant="caption" className={classes.embedSaving}>
+            {translate('online.embedModeSaving', { _: '保存中…' })}
+          </Typography>
+        )}
       </div>
 
       <div className={classes.settingsSection}>

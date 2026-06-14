@@ -220,8 +220,25 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
       handleTaskChanged,
     )
 
+    // SSE belt-and-braces: the broker coalesces bursts to one event
+    // per subscriber (cap-1 buffered channel), so a task that
+    // transitions resolving → downloading → completed within 200ms
+    // (the common case for a quick download) may collapse to a
+    // single 'tasks-changed' push. That is fine for the eventual
+    // state, but the panel would briefly show "解析中" if the
+    // browser is slow to wake the EventSource. The 1.5s timer
+    // guarantees the UI is never more than 1.5s behind regardless
+    // of SSE burst behavior. We only schedule it while the
+    // feature is enabled, so users who don't use online search pay
+    // no background cost.
+    const pollTimer = window.setInterval(() => {
+      if (!activeRef.current) return
+      refreshDownloadTasks(activeRef)
+    }, 1500)
+
     return () => {
       activeRef.current = false
+      window.clearInterval(pollTimer)
       eventSource.removeEventListener('tasks-changed', handleStreamChange)
       eventSource.close()
       window.removeEventListener(

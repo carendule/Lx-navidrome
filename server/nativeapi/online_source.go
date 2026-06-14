@@ -1,6 +1,7 @@
 package nativeapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -81,6 +82,62 @@ type onlineSourceReorderRequest struct {
 type onlineSourceSettings struct {
 	DownloadPath string   `json:"downloadPath"`
 	NameTemplate []string `json:"nameTemplate,omitempty"`
+	// EmbedMode controls what the downloader writes into the
+	// audio file's native tag container after a successful
+	// download. The three legal values are:
+	//
+	//   "none"      — write nothing. The file plays as a plain
+	//                 bitstream. Cheapest, no ffmpeg cost.
+	//   "metadata"  — write cover art, title, artist, album,
+	//                 and quality. The user gets a useful file
+	//                 in their library but no lyrics.
+	//   "all"       — also write lyrics. Reserved for a
+	//                 follow-up; the embed pipeline accepts
+	//                 this value today and behaves the same as
+	//                 "metadata" until the lyric path lands.
+	//
+	// Requires ffmpeg on PATH for anything other than "none".
+	// Defaults to "metadata" on fresh install; persisted
+	// explicitly so users can opt out without losing the
+	// choice on the next save.
+	EmbedMode string `json:"embedMode"`
+}
+
+// embedModeNone / embedModeMetadata / embedModeAll are the legal
+// values for onlineSourceSettings.EmbedMode. They're compared
+// against the on-disk value with sanitizeEmbedMode, so a typo
+// or a hand-edited settings.json silently falls back to
+// embedModeMetadata rather than disabling embedding.
+const (
+	embedModeNone     = "none"
+	embedModeMetadata = "metadata"
+	embedModeAll      = "all"
+)
+
+// defaultOnlineEmbedMode is the value seeded into a fresh
+// settings file. We pick "metadata" (not "all") because lyric
+// fetching requires the source script to expose a lyric action
+// and many of the popular lx-music scripts only ship musicUrl,
+// so the lyric dispatch would be a wasted round-trip. Users
+// who want lyrics can opt in via the settings panel.
+const defaultOnlineEmbedMode = embedModeMetadata
+
+// sanitizeEmbedMode normalizes the persisted EmbedMode value to
+// one of the three legal strings. Any value that doesn't match
+// the legal set (including empty string from a fresh install,
+// "true"/"false" leftover from the pre-mode settings, or a
+// typo) returns embedModeMetadata so the user keeps the most
+// useful default rather than accidentally losing metadata.
+func sanitizeEmbedMode(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case embedModeNone:
+		return embedModeNone
+	case embedModeAll:
+		return embedModeAll
+	case embedModeMetadata:
+		return embedModeMetadata
+	}
+	return defaultOnlineEmbedMode
 }
 
 // defaultOnlineNameTemplate is the default value for
@@ -202,6 +259,27 @@ func (api *Router) saveOnlineSourceSettings(w http.ResponseWriter, r *http.Reque
 	}
 	if settings.DownloadPath == "" {
 		settings.DownloadPath = defaultOnlineDownloadPath()
+	}
+
+	// EmbedMode has its own UI on the settings panel now, so we
+	// honor whatever the request supplied. The form sends a
+	// sanitized string (one of "none" / "metadata" / "all"), so
+	// sanitizeEmbedMode is belt-and-braces against a hand-edited
+	// settings.json or a stale client. When the request OMITS
+	// the field (the legacy "save download path" payload), we
+	// preserve whatever the user previously chose so the Save
+	// button can't clobber an unrelated setting. A fresh install
+	// falls through to the default via loadOnlineSourceSettings.
+	requestMode := strings.TrimSpace(req.EmbedMode)
+	if requestMode == "" {
+		existing, err := loadOnlineSourceSettings()
+		if err != nil {
+			settings.EmbedMode = defaultOnlineEmbedMode
+		} else {
+			settings.EmbedMode = existing.EmbedMode
+		}
+	} else {
+		settings.EmbedMode = sanitizeEmbedMode(requestMode)
 	}
 
 	if err := saveOnlineSourceSettings(settings); err != nil {
@@ -544,10 +622,22 @@ func loadOnlineSourceSettings() (onlineSourceSettings, error) {
 		return onlineSourceSettings{}, err
 	}
 
-	settings := onlineSourceSettings{
-		DownloadPath: defaultOnlineDownloadPath(),
-		NameTemplate: append([]string{}, defaultOnlineNameTemplate...),
+	// defaultsForOnlineSourceSettings is the single source of
+	// truth for "what does a fresh install look like?". We keep it
+	// separate from the load function so we can re-apply it after
+	// an Unmarshal on an old settings file that doesn't carry
+	// every field we now expect — without this, JSON unmarshal
+	// silently fills missing fields with Go's zero value (false /
+	// "" / nil) and overrides any default the struct literal set.
+	defaultsForOnlineSourceSettings := func() onlineSourceSettings {
+		return onlineSourceSettings{
+			DownloadPath: defaultOnlineDownloadPath(),
+			NameTemplate: append([]string{}, defaultOnlineNameTemplate...),
+			EmbedMode:    defaultOnlineEmbedMode,
+		}
 	}
+
+	settings := defaultsForOnlineSourceSettings()
 	path := onlineSettingsPath()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return settings, nil
@@ -560,9 +650,61 @@ func loadOnlineSourceSettings() (onlineSourceSettings, error) {
 	if len(strings.TrimSpace(string(b))) == 0 {
 		return settings, nil
 	}
+	// Capture the on-disk JSON for two upgrade passes:
+	//
+	//   1. legacy "embedMetadata" boolean (pre-3-state field) — we
+	//      translate true → "all" and false → "none" so the user's
+	//      intent survives the schema migration.
+	//   2. "embedMode" string is missing or carries an unknown
+	//      value (typo, hand-edit) — sanitizeEmbedMode falls back
+	//      to the default.
+	rawOnDiskHasEmbedMode := bytes.Contains(b, []byte("embedMode"))
+	rawOnDiskHasEmbedMetadata := bytes.Contains(b, []byte("embedMetadata"))
+	// Decode the legacy field as a separate type so the unmarshal
+	// can populate it without colliding with the new EmbedMode
+	// string field on onlineSourceSettings. We then drop it from
+	// the payload before unmarshaling the rest of the file.
+	var legacy struct {
+		EmbedMetadata *bool `json:"embedMetadata"`
+	}
+	if rawOnDiskHasEmbedMetadata {
+		if lErr := json.Unmarshal(b, &legacy); lErr == nil &&
+			legacy.EmbedMetadata != nil {
+			// Only honor the legacy field when EmbedMode isn't
+			// already in the file — a modern file with both is
+			// considered authoritative on the new field.
+			if !rawOnDiskHasEmbedMode {
+				if *legacy.EmbedMetadata {
+					settings.EmbedMode = embedModeAll
+				} else {
+					settings.EmbedMode = embedModeNone
+				}
+			}
+		}
+	}
 	if err := json.Unmarshal(b, &settings); err != nil {
 		return onlineSourceSettings{}, err
 	}
+	// Normalize whatever the file said to one of the three legal
+	// values. sanitizeEmbedMode also handles the case where
+	// Unmarshal produced the zero value (empty string) because
+	// the field was missing from the on-disk file.
+	settings.EmbedMode = sanitizeEmbedMode(settings.EmbedMode)
+	// If the file pre-dates the EmbedMode field, rewrite it
+	// with the migrated value so the next load doesn't have to
+	// repeat the dance. The on-disk rewrite is best-effort: a
+	// failure here doesn't block the load.
+	if !rawOnDiskHasEmbedMode {
+		upgraded := onlineSourceSettings{
+			DownloadPath: settings.DownloadPath,
+			NameTemplate: settings.NameTemplate,
+			EmbedMode:    settings.EmbedMode,
+		}
+		if buf, mErr := json.MarshalIndent(upgraded, "", "  "); mErr == nil {
+			_ = os.WriteFile(onlineSettingsPath(), buf, 0o600)
+		}
+	}
+	_ = rawOnDiskHasEmbedMetadata // kept for clarity of intent (legacy field detection)
 	settings.DownloadPath = strings.TrimSpace(settings.DownloadPath)
 	if settings.DownloadPath == "" {
 		settings.DownloadPath = defaultOnlineDownloadPath()
