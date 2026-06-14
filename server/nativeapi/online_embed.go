@@ -223,28 +223,36 @@ func persistOnlineEmbedCover(downloadDir, taskID, mime string, body []byte) (str
 // flows where wy's song was resolved by an ikun custom script).
 //
 // fetchOnlineEmbedLyric is the orchestrator the embed entry
-// points call. The lookup order matches what lxserver-main
-// does at runtime:
+// points call. The lookup order is:
 //
 //  1. The user-supplied lx-music script FIRST, via Node.
 //     Some lx-music scripts ship a built-in lyric provider
 //     (proxies to a paid lyric API, decrypts the source's
 //     VIP-locked lyrics, etc.) that's more reliable than
-//     the public source API. lxserver-main always asks the
-//     script first and only falls back when the script
-//     returns nothing.
+//     the public source API. We score the result with the
+//     same matcher the Go-client fallback uses, so a wrong
+//     song (e.g. a same-title remix) is rejected and we
+//     fall through to the multi-source Go fallback.
 //
-//  2. The Go client SECOND, hitting the public source APIs
-//     (wy/kg/kw/tx/mg). This is the lxserver-main musicSdk
-//     path, ported to Go. It covers the case where the
-//     user's lx-music script doesn't have a lyric action
-//     at all (most custom scripts don't).
+//  2. The Go client with multi-source fallback SECOND.
+//     We try wy / kg / kw / tx / mg in order (see
+//     onlineLyricFallbackOrder), and accept the first
+//     candidate whose [ti:]/[ar:] tags + duration match
+//     the song we downloaded. A single source frequently
+//     has no lyric for a song that another source
+//     happily serves; the cross-source check (see
+//     online_lyric_match.go) is what makes this safe — we
+//     don't accept a tag-less lyric from a single source
+//     without checking the others first.
 //
-// We use both because each path succeeds in different
-// scenarios: the script wins for paid/VIP-locked songs
-// (where the public source returns an empty body or a
-// code: 460 error envelope), the Go client wins for free
-// songs where the script doesn't carry a lyric handler.
+// The matcher is the safety net: a lyric from the "wrong
+// song with the same title" can quietly slip in if we
+// don't compare against songInfo.name / songInfo.singer /
+// songInfo.interval before embedding. The 70/70/3s
+// thresholds (title-similarity, artist-similarity,
+// duration tolerance) were picked to be permissive enough
+// to absorb parenthetical-release differences and strict
+// enough to reject remixes / live versions.
 func fetchOnlineEmbedLyric(ctx context.Context, source onlineSource, songSource string, songInfo map[string]any, quality string) (string, error) {
 	// Top-of-orchestrator trace. The orchestrator is the
 	// most likely place for a silent failure (any error path
@@ -255,31 +263,95 @@ func fetchOnlineEmbedLyric(ctx context.Context, source onlineSource, songSource 
 
 	// 1) User-supplied lx-music script. The script is
 	// invoked with action='lyric' and may return a lyric
-	// string. A `success: false` response is treated as
-	// "script has no lyric handler" and we fall through to
-	// the Go client.
+	// string. We then run the matcher: scripts are most
+	// often the right answer (they know about VIP variants
+	// the public APIs don't), but a same-title
+	// mis-identification is still possible. If the
+	// matcher's score is OK we take the result and
+	// skip the rest of the fallback run.
 	if out, ok := fetchOnlineEmbedLyricViaScriptOk(ctx, source, songSource, songInfo, quality); ok {
-		return out, nil
+		cand := onlineLyricCandidate{Source: "script:" + source.ID, Lyric: out}
+		cand.SelfTitle, cand.SelfArtist, cand.SelfAlbum = onlineLyricParseIDTags(out)
+		cand.LyricDurSec = onlineLyricMaxTimeTagSeconds(out)
+		score := onlineLyricMatchScoreLyric(songInfo, cand)
+		if score.OK {
+			embedTrace(ctx, "lyric:script-accepted", "source", source.ID, "lyricLen", len(out), "titleScore", score.TitleScore, "artistScore", score.ArtistScore, "durationDelta", score.DurationDelta)
+			return out, nil
+		}
+		embedTrace(ctx, "lyric:script-rejected", "source", source.ID, "lyricLen", len(out), "reason", score.Reason, "titleScore", score.TitleScore, "artistScore", score.ArtistScore, "durationDelta", score.DurationDelta)
 	}
 
-	// 2) Go client. Handles mg / tx / kw / kg / wy. We use
-	// songSource (not source.ID) because that's the canonical
-	// source the song actually came from — `source.ID` is the
-	// *resolving* script, which can differ for fallback flows.
-	if res := fetchOnlineLyricBySource(ctx, songSource, songInfo); strings.TrimSpace(res.Lyric) != "" {
-		embedTrace(ctx, "lyric:go-client-ok", "source", songSource, "lyricLen", len(res.Lyric))
-		return res.Lyric, nil
+	// 2) Multi-source Go client fallback. Iterates
+	// onlineLyricFallbackOrder and accepts the first
+	// candidate the matcher approves. The trace line at
+	// the end of the run summarizes every attempt so
+	// the user can see exactly which sources fired,
+	// which produced a lyric, and which (if any) the
+	// matcher accepted.
+	lyric, attempts := onlineLyricFallback(ctx, songInfo)
+	accepted := ""
+	for _, a := range attempts {
+		if a.Accepted {
+			accepted = a.Source
+		}
+	}
+	embedTrace(ctx, "lyric:fallback-result",
+		"acceptedSource", accepted,
+		"finalLen", len(lyric),
+		"attemptCount", len(attempts),
+		"attempts", onlineLyricMatchAttemptsTraceValue(attempts),
+	)
+	if lyric != "" {
+		return lyric, nil
 	}
 	// Trace the empty-result case so the user can tell
-	// whether the per-source fetcher ran but returned
-	// nothing (the [EMBED] lyric:dispatch line above will
-	// have fired with the source key) or whether the
-	// dispatcher never matched (in which case the dispatch
-	// trace will show source=… and supported=false). Both
-	// paths ran with no luck; the embed step falls through
-	// to ffmpeg without a lyrics frame.
-	embedTrace(ctx, "lyric:both-paths-empty", "source", songSource, "songName", stringValue(songInfo["name"]), "songmid", stringValue(songInfo["songmid"]))
+	// whether the per-source fetchers ran but returned
+	// nothing (the [EMBED] lyric:dispatch lines above
+	// will have fired with each source key) or whether
+	// the dispatcher never matched (in which case the
+	// dispatch trace will show source=… and
+	// supported=false). Either way the embed step
+	// falls through to ffmpeg without a lyrics frame.
+	embedTrace(ctx, "lyric:all-paths-empty", "songName", stringValue(songInfo["name"]), "songmid", stringValue(songInfo["songmid"]))
 	return "", nil
+}
+
+// onlineLyricMatchAttemptsTraceValue formats the per-attempt
+// summary as a compact key=value list suitable for the
+// embedTrace helper. The helper is a separate function (not
+// inlined) so we can keep the call site readable and add
+// per-attempt formatting tweaks in one place.
+//
+// Format: "src:tScore/aScore/dDelta=reason" — the three
+// numeric scores come FIRST so the user can grep for
+// borderline cases ("t=50/a=100/d=0" = artist nailed it but
+// the title has a version suffix). Without the numbers, a
+// single "title tag did not match" reason was opaque —
+// the user couldn't tell whether the lyric was the wrong
+// song (rejection correct) or a same-song different
+// source-tagger that just labeled it slightly differently
+// (rejection wrong).
+func onlineLyricMatchAttemptsTraceValue(attempts []onlineLyricMatchAttempt) string {
+	if len(attempts) == 0 {
+		return "<none>"
+	}
+	parts := make([]string, 0, len(attempts))
+	for _, a := range attempts {
+		ts := "na"
+		if a.TitleScore >= 0 {
+			ts = strconv.Itoa(a.TitleScore)
+		}
+		as_ := "na"
+		if a.ArtistScore >= 0 {
+			as_ = strconv.Itoa(a.ArtistScore)
+		}
+		dd := "na"
+		if a.DurationDelta >= 0 {
+			dd = strconv.Itoa(a.DurationDelta)
+		}
+		parts = append(parts, a.Source+":t="+ts+"/a="+as_+"/d="+dd+"="+a.Reason)
+	}
+	return strings.Join(parts, ",")
 }
 
 // fetchOnlineEmbedLyricViaScriptOk is a thin wrapper over
