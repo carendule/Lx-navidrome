@@ -888,6 +888,11 @@ const OnlineSearch = () => {
   const [playlistRecommendRaw, setPlaylistRecommendRaw] = useState([])
   const [playlistLoading, setPlaylistLoading] = useState(false)
   const [playlistError, setPlaylistError] = useState('')
+  const [playlistPage, setPlaylistPage] = useState(1)
+  const [playlistTotal, setPlaylistTotal] = useState(0)
+  const [playlistJumpPageInput, setPlaylistJumpPageInput] = useState('1')
+  const [playlistMetaSource, setPlaylistMetaSource] = useState('')
+  const [playlistLoadedKey, setPlaylistLoadedKey] = useState('')
   const [hotList, setHotList] = useState([])
   const [hotLoading, setHotLoading] = useState(false)
   const [hotDebug, setHotDebug] = useState('')
@@ -917,6 +922,10 @@ const OnlineSearch = () => {
   const [serverDownloadStatus, setServerDownloadStatus] = useState('idle')
 
   const playlistItems = playlistRecommendRaw
+  const playlistTotalPages = Math.max(
+    1,
+    Math.ceil((Number(playlistTotal) || 0) / 30),
+  )
 
   useEffect(() => {
     if (!playlistSortOptions.some((option) => option.key === playlistSort)) {
@@ -968,6 +977,7 @@ const OnlineSearch = () => {
 
   useEffect(() => {
     if (viewMode !== VIEW_MODES.playlist) return
+    if (playlistMetaSource === source && playlistTagGroups.length > 0) return
     let cancelled = false
 
     const loadPlaylistMeta = async () => {
@@ -980,7 +990,11 @@ const OnlineSearch = () => {
         const nextSortOptions = normalizePlaylistSortOptions(json, source)
         setPlaylistTagGroups(tagGroups)
         setPlaylistSortOptions(nextSortOptions)
+        setPlaylistMetaSource(source)
         setPlaylistSelectedTags({})
+        setPlaylistPage(1)
+        setPlaylistJumpPageInput('1')
+        setPlaylistLoadedKey('')
         setPlaylistSort((current) =>
           nextSortOptions.some((item) => item.key === current)
             ? current
@@ -991,7 +1005,9 @@ const OnlineSearch = () => {
         setPlaylistTagGroups([])
         setPlaylistSelectedTags({})
         setPlaylistSortOptions(getPlaylistSortOptions(source))
+        setPlaylistMetaSource('')
         setPlaylistSort('hot')
+        setPlaylistTotal(0)
         setPlaylistError('歌单分类加载失败，请稍后重试')
       }
     }
@@ -1007,31 +1023,52 @@ const OnlineSearch = () => {
     if (!playlistSortOptions.some((item) => item.key === playlistSort)) return
 
     let cancelled = false
-    setPlaylistLoading(true)
-    setPlaylistError('')
 
     // Use search query if provided, otherwise build from selected tags
     let keyword = playlistAppliedQuery.trim()
+    const selectedTagIds = Object.values(playlistSelectedTags)
+      .filter((tid) => tid && String(tid).trim())
+      .map((tid) => String(tid).trim())
     if (!keyword) {
-      const selectedTagIds = Object.values(playlistSelectedTags)
-        .filter((tid) => tid && String(tid).trim())
-        .map((tid) => String(tid).trim())
       keyword = selectedTagIds.length > 0 ? selectedTagIds.join(' ') : '热门'
     }
 
+    const requestKey = JSON.stringify({
+      source,
+      sort: playlistSort,
+      keyword,
+      tags: selectedTagIds,
+      page: playlistPage,
+    })
+    if (playlistLoadedKey === requestKey) return
+
+    setPlaylistLoading(true)
+    setPlaylistError('')
+
     httpClient(
-      `/api/online/playlist/list?source=${encodeURIComponent(source)}&sortId=${encodeURIComponent(playlistSort)}&keyword=${encodeURIComponent(keyword)}&page=1`,
+      `/api/online/playlist/list?source=${encodeURIComponent(source)}&sortId=${encodeURIComponent(playlistSort)}&keyword=${encodeURIComponent(keyword)}&page=${encodeURIComponent(playlistPage)}`,
     )
       .then(({ json }) => {
         if (cancelled) return
         const list = Array.isArray(json?.list) ? json.list : []
+        const totalCount = Number(json?.total)
+        const currentPage = Number(json?.page)
         setPlaylistRecommendRaw(list.map((item) => normalizePlaylistItem(item, source)))
+        setPlaylistTotal(
+          Number.isFinite(totalCount) && totalCount >= 0 ? totalCount : list.length,
+        )
+        if (currentPage > 0) {
+          setPlaylistPage(currentPage)
+          setPlaylistJumpPageInput(String(currentPage))
+        }
+        setPlaylistLoadedKey(requestKey)
         if (json?.error) setPlaylistError(String(json.error))
       })
       .catch(() => {
         if (cancelled) return
         setPlaylistError('歌单推荐加载失败，请稍后重试')
         setPlaylistRecommendRaw([])
+        setPlaylistTotal(0)
       })
       .finally(() => {
         if (!cancelled) setPlaylistLoading(false)
@@ -1045,6 +1082,8 @@ const OnlineSearch = () => {
     playlistSort,
     playlistSortOptions,
     playlistAppliedQuery,
+    playlistPage,
+    playlistLoadedKey,
     source,
     viewMode,
   ])
@@ -1108,6 +1147,9 @@ const OnlineSearch = () => {
       runSearch(query, 1)
       return
     }
+    setPlaylistPage(1)
+    setPlaylistJumpPageInput('1')
+    setPlaylistLoadedKey('')
     setPlaylistAppliedQuery(playlistQuery.trim())
   }, [playlistQuery, query, runSearch, viewMode])
 
@@ -1131,6 +1173,25 @@ const OnlineSearch = () => {
       current === VIEW_MODES.song ? VIEW_MODES.playlist : VIEW_MODES.song,
     )
   }, [])
+
+  const handlePlaylistPrevPage = useCallback(() => {
+    if (playlistLoading || playlistPage <= 1) return
+    setPlaylistPage((current) => current - 1)
+  }, [playlistLoading, playlistPage])
+
+  const handlePlaylistNextPage = useCallback(() => {
+    if (playlistLoading || playlistPage >= playlistTotalPages) return
+    setPlaylistPage((current) => current + 1)
+  }, [playlistLoading, playlistPage, playlistTotalPages])
+
+  const handlePlaylistJumpPage = useCallback(() => {
+    const target = Math.min(
+      playlistTotalPages,
+      Math.max(1, Number(playlistJumpPageInput) || 1),
+    )
+    setPlaylistPage(target)
+    setPlaylistJumpPageInput(String(target))
+  }, [playlistJumpPageInput, playlistTotalPages])
 
   const totalPages = Math.max(1, Math.ceil((Number(total) || 0) / limit))
 
@@ -1451,7 +1512,11 @@ const OnlineSearch = () => {
           className={`${classes.sourceSelect} ${classes.selectControl}`}
           variant="outlined"
           value={source}
-          onChange={(e) => setSource(e.target.value)}
+          onChange={(e) => {
+            setSource(e.target.value)
+            setPlaylistPage(1)
+            setPlaylistJumpPageInput('1')
+          }}
         >
           {SOURCES.map((s) => (
             <MenuItem key={s.key} value={s.key}>
@@ -1464,7 +1529,12 @@ const OnlineSearch = () => {
             className={`${classes.typeSelect} ${classes.selectControl}`}
             variant="outlined"
             value={playlistSort}
-            onChange={(e) => setPlaylistSort(e.target.value)}
+            onChange={(e) => {
+              setPlaylistSort(e.target.value)
+              setPlaylistPage(1)
+              setPlaylistJumpPageInput('1')
+              setPlaylistLoadedKey('')
+            }}
           >
             {playlistSortOptions.map((item) => (
               <MenuItem key={item.key} value={item.key}>
@@ -1519,6 +1589,9 @@ const OnlineSearch = () => {
                   className={`${classes.playlistTagButton} ${playlistSelectedTags[group.name] === tag.id ? 'selected' : ''
                     }`}
                   onClick={() => {
+                    setPlaylistPage(1)
+                    setPlaylistJumpPageInput('1')
+                    setPlaylistLoadedKey('')
                     setPlaylistSelectedTags((prev) => ({
                       ...prev,
                       [group.name]:
@@ -1828,7 +1901,7 @@ const OnlineSearch = () => {
             <div className={classes.resultStatus}>
               <Typography variant="subtitle2">
                 {playlistAppliedQuery
-                  ? `${playlistAppliedQuery} · ${playlistItems.length} 个歌单`
+                  ? `${playlistAppliedQuery} · ${playlistTotal || playlistItems.length} 个歌单`
                   : `${getActivePlaylistCategoryLabel()} · ${activePlaylistSortLabel}`}
               </Typography>
               <Chip
@@ -1909,6 +1982,54 @@ const OnlineSearch = () => {
                 {playlistError}
               </Typography>
             )}
+
+            <div className={classes.paginationRow}>
+              <Typography className={classes.paginationInfo}>
+                {`共 ${playlistTotal} 条 · 第 ${playlistPage} / ${playlistTotalPages} 页`}
+              </Typography>
+              <div className={classes.paginationControls}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={handlePlaylistPrevPage}
+                  disabled={playlistLoading || playlistPage <= 1}
+                >
+                  上一页
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={handlePlaylistNextPage}
+                  disabled={playlistLoading || playlistPage >= playlistTotalPages}
+                >
+                  下一页
+                </Button>
+                <TextField
+                  value={playlistJumpPageInput}
+                  onChange={(e) =>
+                    setPlaylistJumpPageInput(
+                      e.target.value.replace(/[^0-9]/g, ''),
+                    )
+                  }
+                  variant="outlined"
+                  size="small"
+                  className={classes.jumpInput}
+                  placeholder="页码"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handlePlaylistJumpPage()
+                  }}
+                />
+                <Button
+                  size="small"
+                  variant="contained"
+                  color="primary"
+                  onClick={handlePlaylistJumpPage}
+                  disabled={playlistLoading}
+                >
+                  跳转
+                </Button>
+              </div>
+            </div>
 
             <div className={classes.refreshRow}>
               <Button className={classes.refreshBtn} startIcon={<RefreshIcon />} onClick={handleSearch} size="small">
