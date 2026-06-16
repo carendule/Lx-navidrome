@@ -34,7 +34,7 @@ import NowPlayingPanel from './NowPlayingPanel'
 import UserMenu from './UserMenu'
 import config from '../config'
 import { httpClient } from '../dataProvider'
-import DownloadList from '../online/Download_list'
+import DownloadList from '../online/Online_download_list'
 
 const ONLINE_SOURCE_STATUS_CHANGED_EVENT = 'nd:online-source-status-changed'
 const ONLINE_DOWNLOAD_TASK_CHANGED_EVENT = 'nd:online-download-task-changed'
@@ -185,7 +185,7 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
   }, [refreshOnlineSearchVisibility])
 
   useEffect(() => {
-    if (!showOnlineSearch) return () => {}
+    if (!showOnlineSearch) return () => { }
 
     const activeRef = { current: true }
     refreshDownloadTasks(activeRef)
