@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import {
     Card,
+
     CardContent,
     Typography,
     Button,
@@ -8,15 +9,25 @@ import {
     CircularProgress,
     Chip,
     Avatar,
+    IconButton,
     Select,
     MenuItem,
 } from '@material-ui/core'
 import { makeStyles } from '@material-ui/core/styles'
 import RefreshIcon from '@material-ui/icons/Refresh'
 import SearchIcon from '@material-ui/icons/Search'
+import ArrowBackIcon from '@material-ui/icons/ArrowBack'
+import GetAppIcon from '@material-ui/icons/GetApp'
 import { InputAdornment } from '@material-ui/core'
 import { httpClient } from '../dataProvider'
-import { SOURCE_BADGE, formatCompactCount } from './Online_constants'
+import {
+    SOURCE_BADGE,
+    QUALITY_META,
+    getSourceBadge,
+    getQualityKeys,
+    formatCompactCount,
+    formatDuration,
+} from './Online_constants'
 
 const SOURCES = [
     { key: 'wy', label: '网易云' },
@@ -29,6 +40,23 @@ const SOURCES = [
 const useStyles = makeStyles((theme) => ({
     root: {
         padding: theme.spacing(2),
+    },
+    detailSongListContainer: {
+        maxHeight: '600px',
+        overflowY: 'auto',
+        '&::-webkit-scrollbar': {
+            width: '8px',
+        },
+        '&::-webkit-scrollbar-track': {
+            backgroundColor: 'transparent',
+        },
+        '&::-webkit-scrollbar-thumb': {
+            backgroundColor: theme.palette.action.disabled,
+            borderRadius: '4px',
+            '&:hover': {
+                backgroundColor: theme.palette.text.secondary,
+            },
+        },
     },
     loadingBox: {
         display: 'flex',
@@ -247,6 +275,179 @@ const useStyles = makeStyles((theme) => ({
     sortSelect: {
         minWidth: 100,
     },
+    detailBackRow: {
+        marginBottom: theme.spacing(1.2),
+    },
+    detailBackBtn: {
+        textTransform: 'none',
+        borderRadius: 999,
+        paddingLeft: theme.spacing(1),
+        paddingRight: theme.spacing(1.5),
+    },
+    detailCard: {
+        borderRadius: 12,
+        border: `1px solid ${theme.palette.divider}`,
+        marginBottom: theme.spacing(1.5),
+        overflow: 'hidden',
+    },
+    detailHeader: {
+        display: 'flex',
+        gap: theme.spacing(2),
+        alignItems: 'flex-start',
+        [theme.breakpoints.down('sm')]: {
+            flexDirection: 'column',
+        },
+    },
+    detailCover: {
+        width: 132,
+        height: 132,
+        borderRadius: 12,
+        flexShrink: 0,
+        backgroundColor: theme.palette.action.hover,
+    },
+    detailMeta: {
+        minWidth: 0,
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: theme.spacing(0.8),
+    },
+    detailTitle: {
+        fontSize: '1.7rem',
+        fontWeight: 700,
+        lineHeight: 1.2,
+        color: theme.palette.text.primary,
+        [theme.breakpoints.down('sm')]: {
+            fontSize: '1.25rem',
+        },
+    },
+    detailSubMeta: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: theme.spacing(1.2),
+        flexWrap: 'wrap',
+        color: theme.palette.text.secondary,
+    },
+    detailDesc: {
+        marginTop: theme.spacing(0.2),
+        color: theme.palette.text.secondary,
+        lineHeight: 1.7,
+    },
+    detailIdText: {
+        color: theme.palette.text.secondary,
+        fontSize: '0.78rem',
+        textDecoration: 'none',
+        '&:hover': {
+            color: theme.palette.text.primary,
+            textDecoration: 'underline',
+        },
+    },
+    detailSongHeader: {
+        display: 'grid',
+        gridTemplateColumns:
+            '56px minmax(260px, 2fr) minmax(160px, 1.2fr) minmax(160px, 1.2fr) 90px 80px',
+        gap: theme.spacing(1),
+        alignItems: 'center',
+        padding: theme.spacing(1.2, 2),
+        borderBottom: `1px solid ${theme.palette.divider}`,
+        color: theme.palette.text.secondary,
+        fontSize: '0.82rem',
+        fontWeight: 600,
+        [theme.breakpoints.down('sm')]: {
+            gridTemplateColumns: '42px minmax(170px, 2fr) minmax(110px, 1fr) 66px',
+            padding: theme.spacing(1, 1.2),
+        },
+    },
+    detailSongRow: {
+        display: 'grid',
+        gridTemplateColumns:
+            '56px minmax(260px, 2fr) minmax(160px, 1.2fr) minmax(160px, 1.2fr) 90px 80px',
+        gap: theme.spacing(1),
+        alignItems: 'center',
+        padding: theme.spacing(1.2, 2),
+        borderBottom: `1px solid ${theme.palette.divider}`,
+        [theme.breakpoints.down('sm')]: {
+            gridTemplateColumns: '42px minmax(170px, 2fr) minmax(110px, 1fr) 66px',
+            padding: theme.spacing(1, 1.2),
+        },
+    },
+    detailIdx: {
+        textAlign: 'center',
+        color: theme.palette.text.secondary,
+        fontVariantNumeric: 'tabular-nums',
+    },
+    detailSongCell: {
+        display: 'flex',
+        alignItems: 'center',
+        minWidth: 0,
+        gap: theme.spacing(1.1),
+    },
+    detailSongCover: {
+        width: 46,
+        height: 46,
+        borderRadius: 8,
+        background: theme.palette.action.hover,
+        flexShrink: 0,
+        [theme.breakpoints.down('sm')]: {
+            width: 38,
+            height: 38,
+        },
+    },
+    detailSongMain: {
+        minWidth: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: theme.spacing(0.45),
+    },
+    detailSongName: {
+        fontWeight: 600,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+    },
+    detailTagRow: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: theme.spacing(0.6),
+        minHeight: 20,
+        flexWrap: 'wrap',
+    },
+    detailTag: {
+        height: 18,
+        borderRadius: 5,
+        fontSize: '0.66rem',
+        fontWeight: 700,
+    },
+    detailTextCell: {
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+    },
+    detailDurationCell: {
+        textAlign: 'right',
+        fontVariantNumeric: 'tabular-nums',
+        color: theme.palette.text.secondary,
+    },
+    detailActionCell: {
+        display: 'flex',
+        justifyContent: 'flex-end',
+    },
+    detailDownloadBtn: {
+        width: 34,
+        height: 34,
+        borderRadius: 10,
+        color: theme.palette.text.secondary,
+        border: `1px solid ${theme.palette.divider}`,
+        backgroundColor: 'transparent',
+        '&:hover': {
+            backgroundColor: theme.palette.action.hover,
+        },
+    },
+    mobileHidden: {
+        [theme.breakpoints.down('sm')]: {
+            display: 'none',
+        },
+    },
 }))
 
 const normalizePlaylistTagGroups = (raw) => {
@@ -259,7 +460,6 @@ const normalizePlaylistSortOptions = (raw, source) => {
     const PLAYLIST_SORT_OPTIONS_BY_SOURCE = {
         wy: [
             { key: 'hot', label: '最热' },
-            { key: 'new', label: '最新' },
         ],
         tx: [
             { key: 'hot', label: '最热' },
@@ -316,6 +516,61 @@ const normalizePlaylistItem = (item, fallbackSource) => {
         playCountText,
         source: item?.source || fallbackSource,
         cover: item?.img || '',
+        desc: item?.desc || item?.description || item?.intro || '',
+    }
+}
+
+const normalizeDetailSongItem = (item, fallbackSource) => ({
+    id: String(item?.id || `${item?.name || 'song'}-${Math.random()}`),
+    name: item?.name || '未知标题',
+    singer: item?.singer || item?.artist || '--',
+    albumName: item?.albumName || item?.album || '--',
+    duration: item?.duration,
+    interval: item?.interval,
+    img: item?.img || '',
+    source: item?.source || fallbackSource,
+    meta: item?.meta || {},
+})
+
+const normalizeDetailInfo = (info, fallbackPlaylist) => {
+    const playCountRaw = info?.play_count
+    let playCountText = fallbackPlaylist?.playCountText || '0'
+    if (typeof playCountRaw === 'number' && Number.isFinite(playCountRaw)) {
+        playCountText = formatCompactCount(playCountRaw)
+    } else if (typeof playCountRaw === 'string' && playCountRaw.trim()) {
+        playCountText = playCountRaw.trim()
+    }
+
+    return {
+        name: info?.name || fallbackPlaylist?.name || '未命名歌单',
+        author: info?.author || fallbackPlaylist?.author || '--',
+        desc: info?.desc || fallbackPlaylist?.desc || '',
+        cover: info?.img || fallbackPlaylist?.cover || '',
+        playCountText,
+    }
+}
+
+const getPlaylistExternalUrl = (playlistId, source) => {
+    const id = String(playlistId || '').trim()
+    if (!id) return ''
+
+    switch (source) {
+        case 'wy':
+            return `https://music.163.com/#/playlist?id=${encodeURIComponent(id)}`
+        case 'tx':
+            return `https://y.qq.com/n/ryqq/playlist/${encodeURIComponent(id)}`
+        case 'kg': {
+            const cleanId = id.replace(/^id_/, '')
+            return `https://www.kugou.com/yy/special/single/${encodeURIComponent(cleanId)}.html`
+        }
+        case 'kw': {
+            const cleanId = id.includes('__') ? id.split('__')[1] : id
+            return `https://www.kuwo.cn/playlist_detail/${encodeURIComponent(cleanId)}`
+        }
+        case 'mg':
+            return `https://music.migu.cn/v3/music/playlist/${encodeURIComponent(id)}`
+        default:
+            return ''
     }
 }
 
@@ -330,7 +585,6 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog }) => {
     const [playlistSelectedTags, setPlaylistSelectedTags] = useState({})
     const [playlistSortOptions, setPlaylistSortOptions] = useState([
         { key: 'hot', label: '最热' },
-        { key: 'new', label: '最新' },
     ])
     const [playlistRecommendRaw, setPlaylistRecommendRaw] = useState([])
     const [playlistLoading, setPlaylistLoading] = useState(false)
@@ -340,12 +594,27 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog }) => {
     const [playlistJumpPageInput, setPlaylistJumpPageInput] = useState('1')
     const [playlistMetaSource, setPlaylistMetaSource] = useState('')
     const [playlistLoadedKey, setPlaylistLoadedKey] = useState('')
+    const [detailPlaylist, setDetailPlaylist] = useState(null)
+    const [detailInfo, setDetailInfo] = useState(null)
+    const [detailSongs, setDetailSongs] = useState([])
+    const [detailLoading, setDetailLoading] = useState(false)
+    const [detailLoadingMore, setDetailLoadingMore] = useState(false)
+    const [detailError, setDetailError] = useState('')
+    const [detailSongCache, setDetailSongCache] = useState({})
+    const [detailPage, setDetailPage] = useState(1)
+    const [detailTotal, setDetailTotal] = useState(0)
+    const [detailLoadedKey, setDetailLoadedKey] = useState('')
+    const [detailScrollContainer, setDetailScrollContainer] = useState(null)
 
     const badge = SOURCE_BADGE[source] || {}
     const playlistItems = playlistRecommendRaw
     const playlistTotalPages = Math.max(
         1,
         Math.ceil((Number(playlistTotal) || 0) / 30),
+    )
+    const detailPlaylistUrl = getPlaylistExternalUrl(
+        detailPlaylist?.id,
+        detailPlaylist?.source || source,
     )
 
     const getActivePlaylistCategoryLabel = () => {
@@ -401,7 +670,6 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog }) => {
                 setPlaylistSelectedTags({})
                 setPlaylistSortOptions([
                     { key: 'hot', label: '最热' },
-                    { key: 'new', label: '最新' },
                 ])
                 setPlaylistMetaSource('')
                 setPlaylistSort('hot')
@@ -424,19 +692,17 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog }) => {
 
         let cancelled = false
 
-        let keyword = playlistAppliedQuery.trim()
+        const keyword = playlistAppliedQuery.trim()
         const selectedTagIds = Object.values(playlistSelectedTags)
             .filter((tid) => tid && String(tid).trim())
             .map((tid) => String(tid).trim())
-        if (!keyword) {
-            keyword = selectedTagIds.length > 0 ? selectedTagIds.join(' ') : '热门'
-        }
+        const activeTagId = selectedTagIds[0] || ''
 
         const requestKey = JSON.stringify({
             source,
             sort: playlistSort,
             keyword,
-            tags: selectedTagIds,
+            tagId: activeTagId,
             page: playlistPage,
         })
         if (playlistLoadedKey === requestKey) return
@@ -444,9 +710,11 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog }) => {
         setPlaylistLoading(true)
         setPlaylistError('')
 
-        httpClient(
-            `/api/online/playlist/list?source=${encodeURIComponent(source)}&sortId=${encodeURIComponent(playlistSort)}&keyword=${encodeURIComponent(keyword)}&page=${encodeURIComponent(playlistPage)}`,
-        )
+        const listEndpoint = keyword
+            ? `/api/online/playlist/search?source=${encodeURIComponent(source)}&keyword=${encodeURIComponent(keyword)}&page=${encodeURIComponent(playlistPage)}`
+            : `/api/online/playlist/list?source=${encodeURIComponent(source)}&sortId=${encodeURIComponent(playlistSort)}&tagId=${encodeURIComponent(activeTagId)}&page=${encodeURIComponent(playlistPage)}`
+
+        httpClient(listEndpoint)
             .then(({ json }) => {
                 if (cancelled) return
                 const list = Array.isArray(json?.list) ? json.list : []
@@ -514,246 +782,567 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog }) => {
         setPlaylistJumpPageInput(String(target))
     }, [playlistJumpPageInput, playlistTotalPages])
 
+    const handleLoadDetailSongs = useCallback(
+        (item, pageNum = 1, isLoadMore = false) => {
+            if (!item) return
+            const currentSource = item.source || source
+            const currentPlaylistId = String(item.id || '').trim()
+
+            if (!currentPlaylistId) {
+                setDetailError('歌单缺少可用的 ID，无法加载详情')
+                return
+            }
+
+            if (!isLoadMore) {
+                setDetailLoading(true)
+                setDetailSongs([])
+                setDetailInfo(normalizeDetailInfo(null, item))
+                setDetailPage(1)
+                setDetailTotal(0)
+                setDetailLoadedKey('')
+            } else {
+                setDetailLoadingMore(true)
+            }
+            setDetailError('')
+
+            httpClient(
+                `/api/online/playlist/detail?source=${encodeURIComponent(currentSource)}&id=${encodeURIComponent(currentPlaylistId)}&limit=30&page=${encodeURIComponent(pageNum)}`,
+            )
+                .then(({ json }) => {
+                    const list = Array.isArray(json?.list) ? json.list : []
+                    const totalCount = Number(json?.total) || Number(item.songCount) || 0
+                    const normalized = list.map((song) =>
+                        normalizeDetailSongItem(song, currentSource),
+                    )
+                    if (json?.info) {
+                        setDetailInfo(normalizeDetailInfo(json.info, item))
+                    }
+
+                    if (isLoadMore) {
+                        setDetailSongs((prev) => [...prev, ...normalized])
+                    } else {
+                        setDetailSongs(normalized)
+                    }
+                    setDetailTotal(totalCount)
+                    setDetailPage(pageNum)
+                    if (json?.error) setDetailError(String(json.error))
+                })
+                .catch(() => {
+                    if (!isLoadMore) {
+                        setDetailSongs([])
+                    }
+                    setDetailError('歌单详情加载失败，请稍后重试')
+                })
+                .finally(() => {
+                    if (isLoadMore) {
+                        setDetailLoadingMore(false)
+                    } else {
+                        setDetailLoading(false)
+                    }
+                })
+        },
+        [source],
+    )
+
+    const handleOpenPlaylistDetail = useCallback(
+        (item) => {
+            if (!item) return
+            setDetailPlaylist(item)
+            setDetailInfo(normalizeDetailInfo(null, item))
+            handleLoadDetailSongs(item, 1, false)
+        },
+        [handleLoadDetailSongs],
+    )
+
+    const handleLoadMoreDetailSongs = useCallback(() => {
+        if (!detailPlaylist || detailLoadingMore || detailLoading) return
+        // 检查是否已经加载了所有歌曲
+        if (detailTotal > 0 && detailSongs.length >= detailTotal) return
+        const nextPage = detailPage + 1
+        const totalPages = Math.ceil(detailTotal / 30)
+        if (nextPage > totalPages) return
+
+        handleLoadDetailSongs(detailPlaylist, nextPage, true)
+    }, [detailPlaylist, detailPage, detailTotal, detailLoadingMore, detailLoading, detailSongs.length, handleLoadDetailSongs])
+
+    useEffect(() => {
+        if (!detailScrollContainer) return
+
+        const handleScroll = () => {
+            const { scrollTop, scrollHeight, clientHeight } = detailScrollContainer
+            // 当滚动距离底部 < 500px 时触发加载
+            if (scrollHeight - scrollTop - clientHeight < 500) {
+                handleLoadMoreDetailSongs()
+            }
+        }
+
+        const container = detailScrollContainer
+        container.addEventListener('scroll', handleScroll)
+        return () => {
+            container.removeEventListener('scroll', handleScroll)
+        }
+    }, [detailScrollContainer, handleLoadMoreDetailSongs])
+
+    const handleBackFromDetail = useCallback(() => {
+        setDetailPlaylist(null)
+        setDetailInfo(null)
+        setDetailError('')
+        setDetailSongs([])
+        setDetailPage(1)
+        setDetailTotal(0)
+        setDetailLoadedKey('')
+        setDetailScrollContainer(null)
+    }, [])
+
     return (
         <div className={classes.root}>
-            {/* ── Row 1: Search and Source ── */}
-            <div className={classes.searchRow}>
-                <TextField
-                    className={classes.searchInput}
-                    variant="outlined"
-                    size="small"
-                    placeholder="搜索歌单..."
-                    value={playlistQuery}
-                    onChange={(e) => setPlaylistQuery(e.target.value)}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleSearch()
-                    }}
-                    InputProps={{
-                        startAdornment: (
-                            <InputAdornment position="start">
-                                <SearchIcon color="action" fontSize="small" />
-                            </InputAdornment>
-                        ),
-                    }}
-                />
-                <Button
-                    variant="contained"
-                    color="primary"
-                    className={classes.searchBtn}
-                    onClick={handleSearch}
-                >
-                    搜索
-                </Button>
-                <Select
-                    className={`${classes.sortSelect} ${classes.selectControl}`}
-                    variant="outlined"
-                    value={playlistSort}
-                    onChange={(e) => {
-                        setPlaylistPage(1)
-                        setPlaylistJumpPageInput('1')
-                        setPlaylistLoadedKey('')
-                        setPlaylistSort(e.target.value)
-                    }}
-                >
-                    {playlistSortOptions.map((opt) => (
-                        <MenuItem key={opt.key} value={opt.key}>
-                            {opt.label}
-                        </MenuItem>
-                    ))}
-                </Select>
-                <Select
-                    className={`${classes.sourceSelect} ${classes.selectControl}`}
-                    variant="outlined"
-                    value={source}
-                    onChange={(e) => setSource(e.target.value)}
-                >
-                    {SOURCES.map((s) => (
-                        <MenuItem key={s.key} value={s.key}>
-                            {s.label}
-                        </MenuItem>
-                    ))}
-                </Select>
-            </div>
-
-            {/* Tag selectors */}
-            {playlistTagGroups.length > 0 && (
-                <div className={classes.playlistTagsRow}>
-                    {playlistTagGroups.map((group) => (
-                        <div key={group.name} className={classes.playlistTagGroup}>
-                            <Typography className={classes.playlistTagGroupLabel}>
-                                {group.name}
-                            </Typography>
-                            {(group.list || []).map((tag) => (
-                                <Button
-                                    key={tag.id}
-                                    size="small"
-                                    className={`${classes.playlistTagButton} ${playlistSelectedTags[group.name] === tag.id ? 'selected' : ''
-                                        }`}
-                                    onClick={() => {
-                                        setPlaylistPage(1)
-                                        setPlaylistJumpPageInput('1')
-                                        setPlaylistLoadedKey('')
-                                        setPlaylistSelectedTags((prev) => ({
-                                            ...prev,
-                                            [group.name]:
-                                                prev[group.name] === tag.id ? '' : tag.id,
-                                        }))
-                                    }}
-                                >
-                                    {tag.name}
-                                </Button>
-                            ))}
-                        </div>
-                    ))}
-                </div>
-            )}
-
-            {/* Playlist list */}
-            <Card className={classes.resultCard} variant="outlined">
-                <CardContent>
-                    <div className={classes.resultStatus}>
-                        <Typography variant="subtitle2">
-                            {playlistAppliedQuery
-                                ? `${playlistAppliedQuery} · ${playlistTotal || playlistItems.length} 个歌单`
-                                : `${getActivePlaylistCategoryLabel()}`}
-                        </Typography>
-                        <Chip
-                            size="small"
-                            label={badge.name}
-                            style={{
-                                backgroundColor: badge.bg,
-                                color: badge.color,
-                                fontWeight: 600,
-                                fontSize: '0.7rem',
-                                height: 20,
-                            }}
-                        />
-                    </div>
-
-                    {playlistLoading ? (
-                        <div className={classes.loadingBox}>
-                            <CircularProgress size={30} />
-                        </div>
-                    ) : playlistItems.length === 0 ? (
-                        <div className={classes.emptyBox}>
-                            <Typography variant="body2">
-                                {playlistError || '暂无推荐歌单'}
-                            </Typography>
-                        </div>
-                    ) : (
-                        <div className={classes.playlistGrid}>
-                            {playlistItems.map((item) => (
-                                <Card
-                                    key={item.id}
-                                    className={classes.playlistGridCard}
-                                    elevation={0}
-                                >
-                                    <div
-                                        className={classes.playlistCover}
-                                        style={
-                                            item.cover
-                                                ? /^linear-gradient/i.test(String(item.cover))
-                                                    ? { background: item.cover }
-                                                    : {
-                                                        backgroundImage: `url(${item.cover})`,
-                                                        backgroundSize: 'cover',
-                                                        backgroundPosition: 'center',
-                                                        backgroundRepeat: 'no-repeat',
-                                                    }
-                                                : { background: '#d9d9d9' }
-                                        }
-                                    >
-                                        <div className={classes.playlistCoverOverlay}>
-                                            <div className={classes.playlistCoverStats}>
-                                                <span>{item.date}</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div className={classes.playlistCardBody}>
-                                        <Typography
-                                            className={classes.playlistCardTitle}
-                                            title={item.name}
-                                        >
-                                            {item.name}
-                                        </Typography>
-                                        <div className={classes.playlistMetaRow}>
-                                            <span title={item.author}>{item.author}</span>
-                                            <span>{item.date}</span>
-                                        </div>
-                                        <div className={classes.playlistMetricRow}>
-                                            <span>{`${item.songCount} 首`}</span>
-                                            <span>{`${item.playCountText || formatCompactCount(item.playCount)} 次收听`}</span>
-                                        </div>
-                                    </div>
-                                </Card>
-                            ))}
-                        </div>
-                    )}
-
-                    {playlistError && playlistItems.length > 0 && (
-                        <Typography variant="caption" color="error">
-                            {playlistError}
-                        </Typography>
-                    )}
-
-                    <div className={classes.paginationRow}>
-                        <Typography className={classes.paginationInfo}>
-                            {`共 ${playlistTotal} 条 · 第 ${playlistPage} / ${playlistTotalPages} 页`}
-                        </Typography>
-                        <div className={classes.paginationControls}>
-                            <Button
-                                size="small"
-                                variant="outlined"
-                                onClick={handlePrevPage}
-                                disabled={playlistLoading || playlistPage <= 1}
-                            >
-                                上一页
-                            </Button>
-                            <Button
-                                size="small"
-                                variant="outlined"
-                                onClick={handleNextPage}
-                                disabled={playlistLoading || playlistPage >= playlistTotalPages}
-                            >
-                                下一页
-                            </Button>
-                            <TextField
-                                value={playlistJumpPageInput}
-                                onChange={(e) =>
-                                    setPlaylistJumpPageInput(e.target.value.replace(/[^0-9]/g, ''))
-                                }
-                                variant="outlined"
-                                size="small"
-                                className={classes.jumpInput}
-                                placeholder="页码"
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter') handleJumpPage()
-                                }}
-                            />
-                            <Button
-                                size="small"
-                                variant="contained"
-                                color="primary"
-                                onClick={handleJumpPage}
-                                disabled={playlistLoading}
-                            >
-                                跳转
-                            </Button>
-                        </div>
-                    </div>
-
-                    <div className={classes.refreshRow}>
+            {detailPlaylist ? (
+                <>
+                    <div className={classes.detailBackRow}>
                         <Button
-                            className={classes.refreshBtn}
-                            startIcon={<RefreshIcon />}
-                            onClick={handleSearch}
+                            variant="outlined"
                             size="small"
+                            startIcon={<ArrowBackIcon />}
+                            onClick={handleBackFromDetail}
+                            className={classes.detailBackBtn}
                         >
-                            刷新歌单
+                            后退
                         </Button>
                     </div>
-                </CardContent>
-            </Card>
+
+                    <Card className={classes.detailCard} variant="outlined">
+                        <CardContent>
+                            <div className={classes.detailHeader}>
+                                <Avatar
+                                    variant="rounded"
+                                    src={(detailInfo?.cover || detailPlaylist.cover) || undefined}
+                                    className={classes.detailCover}
+                                />
+                                <div className={classes.detailMeta}>
+                                    <Typography className={classes.detailTitle}>
+                                        {detailInfo?.name || detailPlaylist.name || '未命名歌单'}
+                                    </Typography>
+                                    <div className={classes.detailSubMeta}>
+                                        <Typography variant="subtitle2" color="textSecondary">
+                                            {detailInfo?.author || detailPlaylist.author || '--'}
+                                        </Typography>
+                                        <Typography variant="body2" color="textSecondary">
+                                            {`${detailTotal || detailPlaylist.songCount || 0} 首歌曲`}
+                                        </Typography>
+                                        <Typography variant="body2" color="textSecondary">
+                                            {`${detailInfo?.playCountText || detailPlaylist.playCountText || '0'} 次收听`}
+                                        </Typography>
+                                    </div>
+                                    <Typography
+                                        className={classes.detailIdText}
+                                        variant="caption"
+                                        component={detailPlaylistUrl ? 'a' : 'span'}
+                                        href={detailPlaylistUrl || undefined}
+                                        target={detailPlaylistUrl ? '_blank' : undefined}
+                                        rel={detailPlaylistUrl ? 'noreferrer noopener' : undefined}
+                                        title={detailPlaylistUrl ? '打开官方歌单页面' : undefined}
+                                    >
+                                        {`歌单ID：${detailPlaylist.id || '--'} (${(SOURCE_BADGE[detailPlaylist.source || source] || {}).name || (detailPlaylist.source || source || '').toUpperCase()})`}
+                                    </Typography>
+                                    <Typography className={classes.detailDesc} variant="body2">
+                                        {detailInfo?.desc || detailPlaylist.desc || '该歌单暂无简介'}
+                                    </Typography>
+                                </div>
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    <Card className={classes.resultCard} variant="outlined">
+                        <CardContent>
+                            <div className={classes.resultStatus}>
+                                <Typography variant="subtitle2">
+                                    {`${detailInfo?.name || detailPlaylist.name || '歌单'} · ${detailSongs.length}/${detailTotal || detailPlaylist.songCount || 0} 首`}
+                                </Typography>
+                                <Chip
+                                    size="small"
+                                    label={(SOURCE_BADGE[detailPlaylist.source || source] || {}).name}
+                                    style={{
+                                        backgroundColor: (SOURCE_BADGE[detailPlaylist.source || source] || {}).bg,
+                                        color: (SOURCE_BADGE[detailPlaylist.source || source] || {}).color,
+                                        fontWeight: 600,
+                                        fontSize: '0.7rem',
+                                        height: 20,
+                                    }}
+                                />
+                            </div>
+
+                            <div className={classes.detailSongHeader}>
+                                <span className={classes.detailIdx}>#</span>
+                                <span>歌曲</span>
+                                <span className={classes.mobileHidden}>歌手</span>
+                                <span className={classes.mobileHidden}>专辑</span>
+                                <span className={classes.mobileHidden}>时长</span>
+                                <span className={classes.detailDurationCell}>操作</span>
+                            </div>
+
+                            <div
+                                className={classes.detailSongListContainer}
+                                ref={setDetailScrollContainer}
+                            >
+                                {detailLoading ? (
+                                    <div className={classes.loadingBox}>
+                                        <CircularProgress size={30} />
+                                    </div>
+                                ) : detailSongs.length === 0 ? (
+                                    <div className={classes.emptyBox}>
+                                        <Typography variant="body2">
+                                            {detailError || '暂无歌单歌曲'}
+                                        </Typography>
+                                    </div>
+                                ) : (
+                                    <div>
+                                        {detailSongs.map((song, idx) => {
+                                            const sourceInfo = getSourceBadge(song.source || source)
+                                            const qualityKeys = getQualityKeys(song)
+                                            return (
+                                                <div
+                                                    key={`${song.id || song.name || 'detail-song'}-${idx}`}
+                                                    className={classes.detailSongRow}
+                                                >
+                                                    <span className={classes.detailIdx}>{idx + 1}</span>
+                                                    <div className={classes.detailSongCell}>
+                                                        <Avatar
+                                                            variant="rounded"
+                                                            src={song.img || undefined}
+                                                            className={classes.detailSongCover}
+                                                        />
+                                                        <div className={classes.detailSongMain}>
+                                                            <Typography
+                                                                className={classes.detailSongName}
+                                                                title={song.name || ''}
+                                                            >
+                                                                {song.name || '未知标题'}
+                                                            </Typography>
+                                                            <div className={classes.detailTagRow}>
+                                                                <Chip
+                                                                    size="small"
+                                                                    label={sourceInfo.name}
+                                                                    className={classes.detailTag}
+                                                                    style={{
+                                                                        backgroundColor: sourceInfo.bg,
+                                                                        color: sourceInfo.color,
+                                                                    }}
+                                                                />
+                                                                {qualityKeys.map((qualityKey) => {
+                                                                    const qualityMeta = QUALITY_META[qualityKey] || {
+                                                                        label: qualityKey,
+                                                                        bg: '#ececec',
+                                                                        color: '#555',
+                                                                    }
+                                                                    return (
+                                                                        <Chip
+                                                                            size="small"
+                                                                            key={`${song.id || song.name || idx}-${qualityKey}`}
+                                                                            label={qualityMeta.label}
+                                                                            className={classes.detailTag}
+                                                                            style={{
+                                                                                backgroundColor: qualityMeta.bg,
+                                                                                color: qualityMeta.color,
+                                                                            }}
+                                                                        />
+                                                                    )
+                                                                })}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <Typography
+                                                        className={`${classes.detailTextCell} ${classes.mobileHidden}`}
+                                                        title={song.singer || ''}
+                                                    >
+                                                        {song.singer || '--'}
+                                                    </Typography>
+                                                    <Typography
+                                                        className={`${classes.detailTextCell} ${classes.mobileHidden}`}
+                                                        title={song.albumName || ''}
+                                                    >
+                                                        {song.albumName || '--'}
+                                                    </Typography>
+                                                    <Typography
+                                                        className={`${classes.detailDurationCell} ${classes.mobileHidden}`}
+                                                    >
+                                                        {formatDuration(song.duration || song.interval)}
+                                                    </Typography>
+                                                    <div className={classes.detailActionCell}>
+                                                        <IconButton
+                                                            size="small"
+                                                            className={classes.detailDownloadBtn}
+                                                            onClick={() =>
+                                                                onOpenDownloadDialog && onOpenDownloadDialog(song)
+                                                            }
+                                                            aria-label="下载"
+                                                            title="下载"
+                                                        >
+                                                            <GetAppIcon fontSize="small" />
+                                                        </IconButton>
+                                                    </div>
+                                                </div>
+                                            )
+                                        })}
+                                        {detailLoadingMore && (
+                                            <div
+                                                style={{
+                                                    display: 'flex',
+                                                    justifyContent: 'center',
+                                                    padding: '16px',
+                                                }}
+                                            >
+                                                <CircularProgress size={20} />
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </CardContent>
+                    </Card>
+                </>
+            ) : (
+                <>
+                    {/* ── Row 1: Search and Source ── */}
+                    <div className={classes.searchRow}>
+                        <TextField
+                            className={classes.searchInput}
+                            variant="outlined"
+                            size="small"
+                            placeholder="搜索歌单..."
+                            value={playlistQuery}
+                            onChange={(e) => setPlaylistQuery(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') handleSearch()
+                            }}
+                            InputProps={{
+                                startAdornment: (
+                                    <InputAdornment position="start">
+                                        <SearchIcon color="action" fontSize="small" />
+                                    </InputAdornment>
+                                ),
+                            }}
+                        />
+                        <Button
+                            variant="contained"
+                            color="primary"
+                            className={classes.searchBtn}
+                            onClick={handleSearch}
+                        >
+                            搜索
+                        </Button>
+                        <Select
+                            className={`${classes.sortSelect} ${classes.selectControl}`}
+                            variant="outlined"
+                            value={playlistSort}
+                            onChange={(e) => {
+                                setPlaylistPage(1)
+                                setPlaylistJumpPageInput('1')
+                                setPlaylistLoadedKey('')
+                                setPlaylistSort(e.target.value)
+                            }}
+                        >
+                            {playlistSortOptions.map((opt) => (
+                                <MenuItem key={opt.key} value={opt.key}>
+                                    {opt.label}
+                                </MenuItem>
+                            ))}
+                        </Select>
+                        <Select
+                            className={`${classes.sourceSelect} ${classes.selectControl}`}
+                            variant="outlined"
+                            value={source}
+                            onChange={(e) => setSource(e.target.value)}
+                        >
+                            {SOURCES.map((s) => (
+                                <MenuItem key={s.key} value={s.key}>
+                                    {s.label}
+                                </MenuItem>
+                            ))}
+                        </Select>
+                    </div>
+
+                    {/* Tag selectors */}
+                    {playlistTagGroups.length > 0 && (
+                        <div className={classes.playlistTagsRow}>
+                            {playlistTagGroups.map((group) => (
+                                <div key={group.name} className={classes.playlistTagGroup}>
+                                    <Typography className={classes.playlistTagGroupLabel}>
+                                        {group.name}
+                                    </Typography>
+                                    {(group.list || []).map((tag) => (
+                                        <Button
+                                            key={tag.id}
+                                            size="small"
+                                            className={`${classes.playlistTagButton} ${playlistSelectedTags[group.name] === tag.id ? 'selected' : ''
+                                                }`}
+                                            onClick={() => {
+                                                setPlaylistPage(1)
+                                                setPlaylistJumpPageInput('1')
+                                                setPlaylistLoadedKey('')
+                                                setPlaylistSelectedTags((prev) => ({
+                                                    ...prev,
+                                                    [group.name]:
+                                                        prev[group.name] === tag.id ? '' : tag.id,
+                                                }))
+                                            }}
+                                        >
+                                            {tag.name}
+                                        </Button>
+                                    ))}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* Playlist list */}
+                    <Card className={classes.resultCard} variant="outlined">
+                        <CardContent>
+                            <div className={classes.resultStatus}>
+                                <Typography variant="subtitle2">
+                                    {playlistAppliedQuery
+                                        ? `${playlistAppliedQuery} · ${playlistTotal || playlistItems.length} 个歌单`
+                                        : `${getActivePlaylistCategoryLabel()}`}
+                                </Typography>
+                                <Chip
+                                    size="small"
+                                    label={badge.name}
+                                    style={{
+                                        backgroundColor: badge.bg,
+                                        color: badge.color,
+                                        fontWeight: 600,
+                                        fontSize: '0.7rem',
+                                        height: 20,
+                                    }}
+                                />
+                            </div>
+
+                            {playlistLoading ? (
+                                <div className={classes.loadingBox}>
+                                    <CircularProgress size={30} />
+                                </div>
+                            ) : playlistItems.length === 0 ? (
+                                <div className={classes.emptyBox}>
+                                    <Typography variant="body2">
+                                        {playlistError || '暂无推荐歌单'}
+                                    </Typography>
+                                </div>
+                            ) : (
+                                <div className={classes.playlistGrid}>
+                                    {playlistItems.map((item) => (
+                                        <Card
+                                            key={item.id}
+                                            className={classes.playlistGridCard}
+                                            elevation={0}
+                                            onClick={() => handleOpenPlaylistDetail(item)}
+                                        >
+                                            <div
+                                                className={classes.playlistCover}
+                                                style={
+                                                    item.cover
+                                                        ? /^linear-gradient/i.test(String(item.cover))
+                                                            ? { background: item.cover }
+                                                            : {
+                                                                backgroundImage: `url(${item.cover})`,
+                                                                backgroundSize: 'cover',
+                                                                backgroundPosition: 'center',
+                                                                backgroundRepeat: 'no-repeat',
+                                                            }
+                                                        : { background: '#d9d9d9' }
+                                                }
+                                            >
+                                                <div className={classes.playlistCoverOverlay}>
+                                                    <div className={classes.playlistCoverStats}>
+                                                        <span>{item.date}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div className={classes.playlistCardBody}>
+                                                <Typography
+                                                    className={classes.playlistCardTitle}
+                                                    title={item.name}
+                                                >
+                                                    {item.name}
+                                                </Typography>
+                                                <div className={classes.playlistMetaRow}>
+                                                    <span title={item.author}>{item.author}</span>
+                                                    <span>{item.date}</span>
+                                                </div>
+                                                <div className={classes.playlistMetricRow}>
+                                                    <span>{`${item.songCount} 首`}</span>
+                                                    <span>{`${item.playCountText || formatCompactCount(item.playCount)} 次收听`}</span>
+                                                </div>
+                                            </div>
+                                        </Card>
+                                    ))}
+                                </div>
+                            )}
+
+                            {playlistError && playlistItems.length > 0 && (
+                                <Typography variant="caption" color="error">
+                                    {playlistError}
+                                </Typography>
+                            )}
+
+                            <div className={classes.paginationRow}>
+                                <Typography className={classes.paginationInfo}>
+                                    {`共 ${playlistTotal} 条 · 第 ${playlistPage} / ${playlistTotalPages} 页`}
+                                </Typography>
+                                <div className={classes.paginationControls}>
+                                    <Button
+                                        size="small"
+                                        variant="outlined"
+                                        onClick={handlePrevPage}
+                                        disabled={playlistLoading || playlistPage <= 1}
+                                    >
+                                        上一页
+                                    </Button>
+                                    <Button
+                                        size="small"
+                                        variant="outlined"
+                                        onClick={handleNextPage}
+                                        disabled={playlistLoading || playlistPage >= playlistTotalPages}
+                                    >
+                                        下一页
+                                    </Button>
+                                    <TextField
+                                        value={playlistJumpPageInput}
+                                        onChange={(e) =>
+                                            setPlaylistJumpPageInput(e.target.value.replace(/[^0-9]/g, ''))
+                                        }
+                                        variant="outlined"
+                                        size="small"
+                                        className={classes.jumpInput}
+                                        placeholder="页码"
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') handleJumpPage()
+                                        }}
+                                    />
+                                    <Button
+                                        size="small"
+                                        variant="contained"
+                                        color="primary"
+                                        onClick={handleJumpPage}
+                                        disabled={playlistLoading}
+                                    >
+                                        跳转
+                                    </Button>
+                                </div>
+                            </div>
+
+                            <div className={classes.refreshRow}>
+                                <Button
+                                    className={classes.refreshBtn}
+                                    startIcon={<RefreshIcon />}
+                                    onClick={handleSearch}
+                                    size="small"
+                                >
+                                    刷新歌单
+                                </Button>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </>
+            )}
         </div>
     )
 }
