@@ -33,6 +33,11 @@ import { fetchOnlineNameTemplate } from './online_source_settings_api'
 
 const ONLINE_DOWNLOAD_TASK_CHANGED_EVENT = 'nd:online-download-task-changed'
 
+const VIEW_MODES = {
+  song: 'song',
+  playlist: 'playlist',
+}
+
 const SOURCES = [
   { key: 'wy', label: '网易云' },
   { key: 'tx', label: 'QQ音乐' },
@@ -60,6 +65,85 @@ const RANK_COLORS = [
   { bg: '#f97c3c', color: '#fff' },
   { bg: '#ffb03a', color: '#fff' },
 ]
+
+const PLAYLIST_SORT_OPTIONS_BY_SOURCE = {
+  wy: [
+    { key: 'hot', label: '最热' },
+    { key: 'new', label: '最新' },
+  ],
+  tx: [
+    { key: 'hot', label: '最热' },
+    { key: 'new', label: '最新' },
+  ],
+  kg: [
+    { key: '5', label: '推荐' },
+    { key: '6', label: '最热' },
+    { key: '7', label: '最新' },
+    { key: '3', label: '热藏' },
+    { key: '8', label: '飙升' },
+  ],
+  kw: [
+    { key: 'new', label: '最新' },
+    { key: 'hot', label: '最热' },
+  ],
+  bd: [
+    { key: 'hot', label: '最热' },
+    { key: 'new', label: '最新' },
+  ],
+}
+
+const getPlaylistSortOptions = (source) =>
+  PLAYLIST_SORT_OPTIONS_BY_SOURCE[source] || PLAYLIST_SORT_OPTIONS_BY_SOURCE.wy
+
+const normalizePlaylistTagGroups = (raw) => {
+  const fallback = []
+  if (!raw || !Array.isArray(raw.tags)) return fallback
+  return raw.tags || []
+}
+
+const normalizePlaylistSortOptions = (raw, source) => {
+  const fallback = getPlaylistSortOptions(source)
+  const list = Array.isArray(raw?.sortList) ? raw.sortList : []
+  if (!list.length) return fallback
+  const mapped = list
+    .map((item) => ({
+      key: String(item?.id ?? '').trim(),
+      label: String(item?.name ?? '').trim(),
+    }))
+    .filter((item) => item.key && item.label)
+  return mapped.length ? mapped : fallback
+}
+
+const normalizePlaylistItem = (item, fallbackSource) => {
+  const playCountRaw = item?.play_count
+  let playCountText = ''
+  if (typeof playCountRaw === 'number' && Number.isFinite(playCountRaw)) {
+    playCountText = formatCompactCount(playCountRaw)
+  } else if (typeof playCountRaw === 'string' && playCountRaw.trim()) {
+    playCountText = playCountRaw.trim()
+  } else {
+    playCountText = '0'
+  }
+
+  return {
+    id: String(item?.id || `${item?.name || 'playlist'}-${Math.random()}`),
+    name: item?.name || '未命名歌单',
+    author: item?.author || '--',
+    date: item?.time || '--',
+    songCount: Number(item?.total) || 0,
+    playCountText,
+    source: item?.source || fallbackSource,
+    cover: item?.img || '',
+  }
+}
+
+const formatCompactCount = (value) => {
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  const num = Number(value)
+  if (!Number.isFinite(num) || num <= 0) return '0'
+  if (num < 10000) return String(Math.round(num))
+  return `${(num / 10000).toFixed(num >= 100000 ? 0 : 1)}万`
+}
 
 const useStyles = makeStyles((theme) => ({
   root: {
@@ -348,6 +432,197 @@ const useStyles = makeStyles((theme) => ({
     padding: theme.spacing(1.4, 1.8),
     fontWeight: 600,
   },
+  modeSwitchWrap: {
+    marginLeft: 'auto',
+    display: 'flex',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  modeSwitch: {
+    position: 'relative',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: 136,
+    height: 36,
+    padding: 0,
+    borderRadius: 18,
+    border: '1px solid rgba(25, 118, 210, 0.22)',
+    backgroundColor: 'rgba(25, 118, 210, 0.08)',
+    color: theme.palette.text.secondary,
+    textTransform: 'none',
+    boxShadow: 'none',
+    cursor: 'pointer',
+    overflow: 'hidden',
+    transition:
+      'background-color 0.2s ease, border-color 0.2s ease, transform 0.2s ease',
+    '&:hover': {
+      backgroundColor: 'rgba(25, 118, 210, 0.12)',
+      borderColor: 'rgba(25, 118, 210, 0.32)',
+      boxShadow: 'none',
+    },
+    '&:active': {
+      transform: 'scale(0.99)',
+    },
+  },
+  modeSwitchThumb: {
+    position: 'absolute',
+    top: 2,
+    left: 2,
+    width: 66,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: theme.palette.primary.main,
+    boxShadow: 'none',
+    transition: 'transform 0.24s cubic-bezier(0.2, 0.8, 0.2, 1)',
+  },
+  modeSwitchThumbPlaylist: {
+    transform: 'translateX(66px)',
+  },
+  modeSwitchText: {
+    position: 'relative',
+    zIndex: 1,
+    flex: 1,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    textAlign: 'center',
+    fontSize: '0.82rem',
+    fontWeight: 700,
+    lineHeight: '1',
+    pointerEvents: 'none',
+    transition: 'color 0.2s ease',
+  },
+  modeSwitchTextActive: {
+    color: '#111',
+  },
+  playlistGridCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    height: '100%',
+    borderRadius: 14,
+    border: 'none',
+    overflow: 'hidden',
+    backgroundColor: theme.palette.background.paper,
+    transition: 'transform 0.18s ease, box-shadow 0.18s ease',
+    boxShadow: '0 1px 3px rgba(0, 0, 0, 0.08)',
+    '&:hover': {
+      transform: 'translateY(-2px)',
+      boxShadow: '0 8px 20px rgba(0, 0, 0, 0.12)',
+    },
+  },
+  playlistGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
+    gap: theme.spacing(1.2),
+  },
+  playlistCover: {
+    aspectRatio: '1 / 1',
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  playlistCoverOverlay: {
+    position: 'absolute',
+    inset: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'space-between',
+    padding: theme.spacing(0.95),
+    color: '#fff',
+    background: 'linear-gradient(180deg, rgba(0,0,0,0.03) 0%, rgba(0,0,0,0.12) 100%)',
+  },
+  playlistCoverStats: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: theme.spacing(1),
+    fontSize: '0.7rem',
+    fontWeight: 600,
+    opacity: 0.95,
+  },
+  playlistCardBody: {
+    flex: 1,
+    minHeight: 0,
+    padding: theme.spacing(0.95, 1, 1.05),
+    display: 'flex',
+    flexDirection: 'column',
+    gap: theme.spacing(0.4),
+  },
+  playlistCardTitle: {
+    fontSize: '0.82rem',
+    lineHeight: 1.3,
+    fontWeight: 700,
+    color: theme.palette.text.primary,
+    display: '-webkit-box',
+    overflow: 'hidden',
+    WebkitBoxOrient: 'vertical',
+    WebkitLineClamp: 2,
+  },
+  playlistMetaRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: theme.spacing(1),
+    flexWrap: 'nowrap',
+    color: theme.palette.text.secondary,
+    fontSize: '0.72rem',
+    '& > span': {
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    },
+  },
+  playlistMetricRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: theme.spacing(1),
+    color: theme.palette.text.secondary,
+    fontSize: '0.7rem',
+    marginTop: 'auto',
+    paddingTop: theme.spacing(0.1),
+  },
+  playlistTagsRow: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: theme.spacing(1),
+    marginBottom: theme.spacing(1.5),
+  },
+  playlistTagGroup: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: theme.spacing(0.8),
+    width: '100%',
+    paddingLeft: 48,
+  },
+  playlistTagGroupLabel: {
+    fontSize: '0.75rem',
+    fontWeight: 600,
+    color: theme.palette.text.secondary,
+    minWidth: 40,
+    flexShrink: 0,
+    marginLeft: -48,
+  },
+  playlistTagButton: {
+    height: 28,
+    fontSize: '0.8rem',
+    textTransform: 'none',
+    border: `1px solid ${theme.palette.divider}`,
+    borderRadius: 6,
+    padding: theme.spacing(0.5, 1.2),
+    backgroundColor: 'transparent',
+    color: theme.palette.text.secondary,
+    transition: 'all 0.2s ease',
+    display: 'flex',
+    alignItems: 'center',
+    '&:hover': {
+      backgroundColor: theme.palette.action.hover,
+    },
+    '&.selected': {
+      backgroundColor: theme.palette.primary.main,
+      color: '#fff',
+      border: `1px solid ${theme.palette.primary.main}`,
+    },
+  },
 }))
 
 const QUALITY_META = {
@@ -598,9 +873,21 @@ const OnlineSearch = () => {
   const translate = useTranslate()
   const notify = useNotify()
 
+  const [viewMode, setViewMode] = useState(VIEW_MODES.song)
   const [query, setQuery] = useState('')
+  const [playlistQuery, setPlaylistQuery] = useState('')
+  const [playlistAppliedQuery, setPlaylistAppliedQuery] = useState('')
   const [type, setType] = useState('song')
   const [source, setSource] = useState('wy')
+  const [playlistSort, setPlaylistSort] = useState('hot')
+  const [playlistTagGroups, setPlaylistTagGroups] = useState([])
+  const [playlistSelectedTags, setPlaylistSelectedTags] = useState({})
+  const [playlistSortOptions, setPlaylistSortOptions] = useState(
+    getPlaylistSortOptions('wy'),
+  )
+  const [playlistRecommendRaw, setPlaylistRecommendRaw] = useState([])
+  const [playlistLoading, setPlaylistLoading] = useState(false)
+  const [playlistError, setPlaylistError] = useState('')
   const [hotList, setHotList] = useState([])
   const [hotLoading, setHotLoading] = useState(false)
   const [hotDebug, setHotDebug] = useState('')
@@ -629,6 +916,14 @@ const OnlineSearch = () => {
   const [serverDownloadLoading, setServerDownloadLoading] = useState(false)
   const [serverDownloadStatus, setServerDownloadStatus] = useState('idle')
 
+  const playlistItems = playlistRecommendRaw
+
+  useEffect(() => {
+    if (!playlistSortOptions.some((option) => option.key === playlistSort)) {
+      setPlaylistSort(playlistSortOptions[0]?.key || 'hot')
+    }
+  }, [playlistSort, playlistSortOptions])
+
   const loadHotSearch = useCallback((src, forceRefresh = false) => {
     setHotLoading(true)
     setHotList([])
@@ -655,10 +950,11 @@ const OnlineSearch = () => {
   }, [])
 
   useEffect(() => {
-    loadHotSearch(source)
-  }, [source, loadHotSearch])
+    if (viewMode === VIEW_MODES.song) loadHotSearch(source)
+  }, [source, loadHotSearch, viewMode])
 
   useEffect(() => {
+    if (viewMode !== VIEW_MODES.song) return
     if (!String(query || '').trim()) {
       setHasSearched(false)
       setResults([])
@@ -668,7 +964,90 @@ const OnlineSearch = () => {
       setTotal(0)
       setJumpPageInput('1')
     }
-  }, [query])
+  }, [query, viewMode])
+
+  useEffect(() => {
+    if (viewMode !== VIEW_MODES.playlist) return
+    let cancelled = false
+
+    const loadPlaylistMeta = async () => {
+      try {
+        const { json } = await httpClient(
+          `/api/online/playlist/tags?source=${encodeURIComponent(source)}`,
+        )
+        if (cancelled) return
+        const tagGroups = normalizePlaylistTagGroups(json)
+        const nextSortOptions = normalizePlaylistSortOptions(json, source)
+        setPlaylistTagGroups(tagGroups)
+        setPlaylistSortOptions(nextSortOptions)
+        setPlaylistSelectedTags({})
+        setPlaylistSort((current) =>
+          nextSortOptions.some((item) => item.key === current)
+            ? current
+            : nextSortOptions[0]?.key || 'hot',
+        )
+      } catch (e) {
+        if (cancelled) return
+        setPlaylistTagGroups([])
+        setPlaylistSelectedTags({})
+        setPlaylistSortOptions(getPlaylistSortOptions(source))
+        setPlaylistSort('hot')
+        setPlaylistError('歌单分类加载失败，请稍后重试')
+      }
+    }
+
+    loadPlaylistMeta()
+    return () => {
+      cancelled = true
+    }
+  }, [source, viewMode])
+
+  useEffect(() => {
+    if (viewMode !== VIEW_MODES.playlist) return
+    if (!playlistSortOptions.some((item) => item.key === playlistSort)) return
+
+    let cancelled = false
+    setPlaylistLoading(true)
+    setPlaylistError('')
+
+    // Use search query if provided, otherwise build from selected tags
+    let keyword = playlistAppliedQuery.trim()
+    if (!keyword) {
+      const selectedTagIds = Object.values(playlistSelectedTags)
+        .filter((tid) => tid && String(tid).trim())
+        .map((tid) => String(tid).trim())
+      keyword = selectedTagIds.length > 0 ? selectedTagIds.join(' ') : '热门'
+    }
+
+    httpClient(
+      `/api/online/playlist/list?source=${encodeURIComponent(source)}&sortId=${encodeURIComponent(playlistSort)}&keyword=${encodeURIComponent(keyword)}&page=1`,
+    )
+      .then(({ json }) => {
+        if (cancelled) return
+        const list = Array.isArray(json?.list) ? json.list : []
+        setPlaylistRecommendRaw(list.map((item) => normalizePlaylistItem(item, source)))
+        if (json?.error) setPlaylistError(String(json.error))
+      })
+      .catch(() => {
+        if (cancelled) return
+        setPlaylistError('歌单推荐加载失败，请稍后重试')
+        setPlaylistRecommendRaw([])
+      })
+      .finally(() => {
+        if (!cancelled) setPlaylistLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    playlistSelectedTags,
+    playlistSort,
+    playlistSortOptions,
+    playlistAppliedQuery,
+    source,
+    viewMode,
+  ])
 
   const runSearch = useCallback(
     (rawKeyword, targetPage = 1) => {
@@ -725,8 +1104,12 @@ const OnlineSearch = () => {
   )
 
   const handleSearch = useCallback(() => {
-    runSearch(query, 1)
-  }, [query, runSearch])
+    if (viewMode === VIEW_MODES.song) {
+      runSearch(query, 1)
+      return
+    }
+    setPlaylistAppliedQuery(playlistQuery.trim())
+  }, [playlistQuery, query, runSearch, viewMode])
 
   const handleKeyDown = useCallback(
     (e) => {
@@ -742,6 +1125,12 @@ const OnlineSearch = () => {
     },
     [runSearch],
   )
+
+  const handleToggleMode = useCallback(() => {
+    setViewMode((current) =>
+      current === VIEW_MODES.song ? VIEW_MODES.playlist : VIEW_MODES.song,
+    )
+  }, [])
 
   const totalPages = Math.max(1, Math.ceil((Number(total) || 0) / limit))
 
@@ -973,6 +1362,37 @@ const OnlineSearch = () => {
   }, [handleCloseDownloadDialog, notify, selectedItem, selectedQuality])
 
   const badge = SOURCE_BADGE[source] || {}
+  const currentSearchValue =
+    viewMode === VIEW_MODES.song ? query : playlistQuery
+  const searchPlaceholder =
+    viewMode === VIEW_MODES.song
+      ? translate('online.search.placeholder', { _: '搜索歌曲、歌手...' })
+      : '搜索歌单...'
+  const activePlaylistSortLabel =
+    playlistSortOptions.find((option) => option.key === playlistSort)?.label ||
+    '最热'
+  // Build category label from selected tags
+  const getActivePlaylistCategoryLabel = () => {
+    const selectedCount = Object.values(playlistSelectedTags).filter(
+      (v) => v && String(v).trim(),
+    ).length
+    if (selectedCount === 0) return '全部'
+    if (selectedCount === 1) {
+      // Find the tag name
+      for (const group of playlistTagGroups) {
+        for (const tag of group.list || []) {
+          for (const [groupName, selectedId] of Object.entries(
+            playlistSelectedTags,
+          )) {
+            if (groupName === group.name && selectedId === tag.id) {
+              return tag.name
+            }
+          }
+        }
+      }
+    }
+    return `${selectedCount}个`
+  }
 
   return (
     <div className={classes.root}>
@@ -989,11 +1409,13 @@ const OnlineSearch = () => {
           className={classes.searchInput}
           variant="outlined"
           size="small"
-          placeholder={translate('online.search.placeholder', {
-            _: '搜索歌曲、歌手...',
-          })}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          placeholder={searchPlaceholder}
+          value={currentSearchValue}
+          onChange={(e) =>
+            viewMode === VIEW_MODES.song
+              ? setQuery(e.target.value)
+              : setPlaylistQuery(e.target.value)
+          }
           onKeyDown={handleKeyDown}
           InputProps={{
             startAdornment: (
@@ -1011,18 +1433,20 @@ const OnlineSearch = () => {
         >
           {translate('online.search.button', { _: 'Search' })}
         </Button>
-        <Select
-          className={`${classes.typeSelect} ${classes.selectControl}`}
-          variant="outlined"
-          value={type}
-          onChange={(e) => setType(e.target.value)}
-        >
-          {TYPES.map((t) => (
-            <MenuItem key={t.key} value={t.key}>
-              {t.label}
-            </MenuItem>
-          ))}
-        </Select>
+        {viewMode === VIEW_MODES.song && (
+          <Select
+            className={`${classes.typeSelect} ${classes.selectControl}`}
+            variant="outlined"
+            value={type}
+            onChange={(e) => setType(e.target.value)}
+          >
+            {TYPES.map((t) => (
+              <MenuItem key={t.key} value={t.key}>
+                {t.label}
+              </MenuItem>
+            ))}
+          </Select>
+        )}
         <Select
           className={`${classes.sourceSelect} ${classes.selectControl}`}
           variant="outlined"
@@ -1035,10 +1459,83 @@ const OnlineSearch = () => {
             </MenuItem>
           ))}
         </Select>
+        {viewMode === VIEW_MODES.playlist && (
+          <Select
+            className={`${classes.typeSelect} ${classes.selectControl}`}
+            variant="outlined"
+            value={playlistSort}
+            onChange={(e) => setPlaylistSort(e.target.value)}
+          >
+            {playlistSortOptions.map((item) => (
+              <MenuItem key={item.key} value={item.key}>
+                {item.label}
+              </MenuItem>
+            ))}
+          </Select>
+        )}
+        <div className={classes.modeSwitchWrap}>
+          <Button
+            className={classes.modeSwitch}
+            onClick={handleToggleMode}
+            role="switch"
+            aria-checked={viewMode === VIEW_MODES.playlist}
+          >
+            <span
+              className={`${classes.modeSwitchThumb} ${viewMode === VIEW_MODES.playlist
+                ? classes.modeSwitchThumbPlaylist
+                : ''
+                }`}
+            />
+            <span
+              className={`${classes.modeSwitchText} ${viewMode === VIEW_MODES.song ? classes.modeSwitchTextActive : ''
+                }`}
+            >
+              搜歌
+            </span>
+            <span
+              className={`${classes.modeSwitchText} ${viewMode === VIEW_MODES.playlist
+                ? classes.modeSwitchTextActive
+                : ''
+                }`}
+            >
+              歌单
+            </span>
+          </Button>
+        </div>
       </div>
 
+      {/* ── Row 1.5: playlist tag selectors ── */}
+      {viewMode === VIEW_MODES.playlist && playlistTagGroups.length > 0 && (
+        <div className={classes.playlistTagsRow}>
+          {playlistTagGroups.map((group) => (
+            <div key={group.name} className={classes.playlistTagGroup}>
+              <Typography className={classes.playlistTagGroupLabel}>
+                {group.name}
+              </Typography>
+              {(group.list || []).map((tag) => (
+                <Button
+                  key={tag.id}
+                  size="small"
+                  className={`${classes.playlistTagButton} ${playlistSelectedTags[group.name] === tag.id ? 'selected' : ''
+                    }`}
+                  onClick={() => {
+                    setPlaylistSelectedTags((prev) => ({
+                      ...prev,
+                      [group.name]:
+                        prev[group.name] === tag.id ? '' : tag.id,
+                    }))
+                  }}
+                >
+                  {tag.name}
+                </Button>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* ── Row 2: hot search (shown only before search / when input is empty) ── */}
-      {!hasSearched && (
+      {viewMode === VIEW_MODES.song && !hasSearched && (
         <Card className={classes.hotCard} variant="outlined">
           <CardContent>
             <div className={classes.hotHeader}>
@@ -1087,9 +1584,9 @@ const OnlineSearch = () => {
                           style={
                             rankStyle
                               ? {
-                                  backgroundColor: rankStyle.bg,
-                                  color: rankStyle.color,
-                                }
+                                backgroundColor: rankStyle.bg,
+                                color: rankStyle.color,
+                              }
                               : {}
                           }
                         >
@@ -1147,7 +1644,7 @@ const OnlineSearch = () => {
         </Card>
       )}
 
-      {hasSearched && (
+      {viewMode === VIEW_MODES.song && hasSearched && (
         <Card className={classes.resultCard} variant="outlined">
           <CardContent>
             <div className={classes.resultStatus}>
@@ -1320,6 +1817,103 @@ const OnlineSearch = () => {
                   跳转
                 </Button>
               </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {viewMode === VIEW_MODES.playlist && (
+        <Card className={classes.resultCard} variant="outlined">
+          <CardContent>
+            <div className={classes.resultStatus}>
+              <Typography variant="subtitle2">
+                {playlistAppliedQuery
+                  ? `${playlistAppliedQuery} · ${playlistItems.length} 个歌单`
+                  : `${getActivePlaylistCategoryLabel()} · ${activePlaylistSortLabel}`}
+              </Typography>
+              <Chip
+                size="small"
+                label={badge.name}
+                style={{
+                  backgroundColor: badge.bg,
+                  color: badge.color,
+                  fontWeight: 600,
+                  fontSize: '0.7rem',
+                  height: 20,
+                }}
+              />
+            </div>
+
+            {playlistLoading ? (
+              <div className={classes.loadingBox}>
+                <CircularProgress size={30} />
+              </div>
+            ) : playlistItems.length === 0 ? (
+              <div className={classes.emptyBox}>
+                <Typography variant="body2">
+                  {playlistError || '暂无推荐歌单'}
+                </Typography>
+              </div>
+            ) : (
+              <div className={classes.playlistGrid}>
+                {playlistItems.map((item) => (
+                  <Card
+                    key={item.id}
+                    className={classes.playlistGridCard}
+                    elevation={0}
+                  >
+                    <div
+                      className={classes.playlistCover}
+                      style={
+                        item.cover
+                          ? /^linear-gradient/i.test(String(item.cover))
+                            ? { background: item.cover }
+                            : {
+                              backgroundImage: `url(${item.cover})`,
+                              backgroundSize: 'cover',
+                              backgroundPosition: 'center',
+                              backgroundRepeat: 'no-repeat',
+                            }
+                          : { background: '#d9d9d9' }
+                      }
+                    >
+                      <div className={classes.playlistCoverOverlay}>
+                        <div className={classes.playlistCoverStats}>
+                          <span>{item.date}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className={classes.playlistCardBody}>
+                      <Typography
+                        className={classes.playlistCardTitle}
+                        title={item.name}
+                      >
+                        {item.name}
+                      </Typography>
+                      <div className={classes.playlistMetaRow}>
+                        <span title={item.author}>{item.author}</span>
+                        <span>{item.date}</span>
+                      </div>
+                      <div className={classes.playlistMetricRow}>
+                        <span>{`${item.songCount} 首`}</span>
+                        <span>{`${item.playCountText || formatCompactCount(item.playCount)} 次收听`}</span>
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
+
+            {playlistError && playlistItems.length > 0 && (
+              <Typography variant="caption" color="error">
+                {playlistError}
+              </Typography>
+            )}
+
+            <div className={classes.refreshRow}>
+              <Button className={classes.refreshBtn} startIcon={<RefreshIcon />} onClick={handleSearch} size="small">
+                {translate('online.search.refreshHot', { _: '刷新歌单' })}
+              </Button>
             </div>
           </CardContent>
         </Card>

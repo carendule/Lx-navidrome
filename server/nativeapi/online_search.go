@@ -270,6 +270,7 @@ try {
 }
 var page = Number(process.env.ND_PAGE || '1');
 var limit = Number(process.env.ND_LIMIT || '20');
+var sortId = String(process.env.ND_SORT_ID || '').trim();
 var timeoutMs = Number(process.env.ND_TIMEOUT_MS || '8000');
 
 function makeRequest(targetUrl, opts) {
@@ -388,6 +389,7 @@ function mgSignature(text) {
 function mgSearchSwitch(type) {
   if (type === 'singer') return '%7B%22song%22%3A0%2C%22album%22%3A0%2C%22singer%22%3A1%2C%22tagSong%22%3A0%2C%22mvSong%22%3A0%2C%22bestShow%22%3A1%2C%22songlist%22%3A0%2C%22lyricSong%22%3A0%7D';
   if (type === 'album') return '%7B%22song%22%3A0%2C%22album%22%3A1%2C%22singer%22%3A0%2C%22tagSong%22%3A0%2C%22mvSong%22%3A0%2C%22bestShow%22%3A1%2C%22songlist%22%3A0%2C%22lyricSong%22%3A0%7D';
+  if (type === 'playlist') return '%7B%22song%22%3A0%2C%22album%22%3A0%2C%22singer%22%3A0%2C%22tagSong%22%3A0%2C%22mvSong%22%3A0%2C%22bestShow%22%3A1%2C%22songlist%22%3A1%2C%22lyricSong%22%3A0%7D';
   return '%7B%22song%22%3A1%2C%22album%22%3A0%2C%22singer%22%3A0%2C%22tagSong%22%3A1%2C%22mvSong%22%3A0%2C%22bestShow%22%3A1%2C%22songlist%22%3A0%2C%22lyricSong%22%3A0%7D';
 }
 
@@ -648,6 +650,71 @@ function mapAlbum(list, src) {
   });
 }
 
+function mapPlaylist(list, src) {
+  return (list || []).map(function(item) {
+    var id = '';
+    var name = '';
+    var author = '';
+    var img = '';
+    var time = '';
+    var total = 0;
+    var playCount = 0;
+
+    if (src === 'wy') {
+      id = String(item.id || '');
+      name = item.name || '';
+      author = (item.creator && item.creator.nickname) || '';
+      img = item.coverImgUrl || '';
+      time = item.createTime ? new Date(item.createTime).toISOString().slice(0, 10) : '';
+      total = Number(item.trackCount || item.songCount || 0) || 0;
+      playCount = Number(item.playCount || 0) || 0;
+    } else if (src === 'tx') {
+      id = String(item.dissid || item.id || '');
+      name = item.dissname || item.name || '';
+      author = item.creator && item.creator.name ? item.creator.name : (item.nickname || '');
+      img = item.imgurl || item.cover || '';
+      time = item.createtime || item.create_time || '';
+      total = Number(item.song_count || item.songnum || item.totalSongNum || 0) || 0;
+      playCount = Number(item.listennum || item.play_num || 0) || 0;
+    } else if (src === 'kg') {
+      id = String(item.specialid || item.id || '');
+      name = item.specialname || item.name || '';
+      author = item.nickname || item.author_name || '';
+      img = kgImageUrl(item);
+      time = item.publish_time || item.pub_time || '';
+      total = Number(item.songcount || item.song_count || 0) || 0;
+      playCount = Number(item.play_count || item.playcount || 0) || 0;
+    } else if (src === 'kw') {
+      id = String(item.playlistid || item.id || '');
+      name = item.name || item.title || '';
+      author = item.uname || item.nickname || item.username || '';
+      img = kwPicUrl(item.img, item.web_albumpic_short, item.pic || item.albumpic || '');
+      time = item.pub || item.pubtime || item.createTime || '';
+      total = Number(item.total || item.musicNum || item.songnum || 0) || 0;
+      playCount = Number(item.listencnt || item.playcnt || item.play_count || 0) || 0;
+    } else if (src === 'mg') {
+      id = String(item.id || item.playListId || item.playlistId || '');
+      name = item.name || item.playListName || '';
+      author = item.userName || item.nickName || item.author || '';
+      img = mapMGImg(item.img || item.cover || item.image || '');
+      time = item.createTime || item.createDate || '';
+      total = Number(item.musicNum || item.songNum || item.songCount || 0) || 0;
+      playCount = Number(item.playNum || item.playCount || 0) || 0;
+    }
+
+    return {
+      id: id,
+      name: name,
+      author: author,
+      img: img,
+      time: time,
+      total: total,
+      play_count: playCount,
+      source: src,
+    };
+  }).filter(function(item) { return item.id || item.name; });
+}
+
 function mapCommonList(list, src, searchType) {
   if (searchType === 'song') {
     if (src === 'wy') return mapWYSong(list);
@@ -658,11 +725,65 @@ function mapCommonList(list, src, searchType) {
     return [];
   }
   if (searchType === 'singer') return mapSinger(list, src);
+  if (searchType === 'playlist') return mapPlaylist(list, src);
   return mapAlbum(list, src);
 }
 
+function parseDateScore(value) {
+  if (!value) return 0;
+  var text = String(value).trim();
+  if (!text) return 0;
+  var normalized = text.replace(/\./g, '-').replace(/\//g, '-');
+  var ts = Date.parse(normalized);
+  if (isFinite(ts)) return ts;
+  var m = text.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (m) {
+    var ts2 = Date.parse(m[1] + '-' + m[2] + '-' + m[3]);
+    if (isFinite(ts2)) return ts2;
+  }
+  return 0;
+}
+
+function isPlaylistNewSort(id, src) {
+  var val = String(id || '').toLowerCase();
+  if (!val) return false;
+  if (val === 'new') return true;
+  // TX: 2=最新, KG: 7=最新
+  if (src === 'tx' && val === '2') return true;
+  if (src === 'kg' && val === '7') return true;
+  return false;
+}
+
+function applyPlaylistSort(list, src, id) {
+  if (!Array.isArray(list) || list.length < 2) return list;
+  var next = list.slice();
+  if (isPlaylistNewSort(id, src)) {
+    next.sort(function(a, b) {
+      var d = parseDateScore(b && b.time) - parseDateScore(a && a.time);
+      if (d !== 0) return d;
+      var ai = Number(a && a.id);
+      var bi = Number(b && b.id);
+      if (isFinite(ai) && isFinite(bi) && bi !== ai) return bi - ai;
+      var as = String((a && a.id) || '');
+      var bs = String((b && b.id) || '');
+      if (bs !== as) return bs > as ? 1 : -1;
+      var pa = Number(a && a.play_count) || 0;
+      var pb = Number(b && b.play_count) || 0;
+      return pb - pa;
+    });
+    return next;
+  }
+  next.sort(function(a, b) {
+    var pa = Number(a && a.play_count) || 0;
+    var pb = Number(b && b.play_count) || 0;
+    if (pb !== pa) return pb - pa;
+    return parseDateScore(b && b.time) - parseDateScore(a && a.time);
+  });
+  return next;
+}
+
 function fetchWY() {
-  var typeMap = { song: 1, singer: 100, album: 10 };
+  var typeMap = { song: 1, singer: 100, album: 10, playlist: 1000 };
   var t = typeMap[searchType] || 1;
   var body = 's=' + encodeURIComponent(keyword) + '&type=' + t + '&offset=' + ((page - 1) * limit) + '&limit=' + limit;
   return makeRequest('https://music.163.com/api/cloudsearch/pc', {
@@ -680,10 +801,12 @@ function fetchWY() {
     var total = 0;
     if (searchType === 'song') list = result.songs || [];
     else if (searchType === 'singer') list = result.artists || [];
-    else list = result.albums || [];
+    else if (searchType === 'album') list = result.albums || [];
+    else list = result.playlists || [];
     if (searchType === 'song') total = Number(result.songCount || result.songcount || 0);
     if (searchType === 'singer') total = Number(result.artistCount || result.artistcount || 0);
     if (searchType === 'album') total = Number(result.albumCount || result.albumcount || 0);
+    if (searchType === 'playlist') total = Number(result.playlistCount || result.playlistcount || 0);
     if (!total || !isFinite(total)) total = list.length;
     return { list: mapCommonList(list, 'wy', searchType), total: total };
   });
@@ -735,7 +858,7 @@ function fetchTX() {
     });
   }
 
-  var typeMap = { singer: 1, album: 2 };
+  var typeMap = { singer: 1, album: 2, playlist: 3 };
   var t = typeMap[searchType] || 1;
   var desktopPayload = {
     comm: { ct: '19', cv: '1859', uin: '0' },
@@ -753,7 +876,9 @@ function fetchTX() {
     if (r.statusCode !== 200 || !r.body || r.body.code !== 0) throw new Error('TX returned ' + r.statusCode);
     var data = (r.body.req && r.body.req.data) || {};
     var body = data.body || {};
-    var bucket = searchType === 'singer' ? body.singer : body.album;
+    var bucket = searchType === 'singer'
+      ? body.singer
+      : (searchType === 'album' ? body.album : (body.songlist || body.song_list || body.songList));
     var list = (bucket && bucket.list) || [];
     var total = Number((bucket && bucket.total) || (data.meta && (data.meta.sum || data.meta.total)) || 0);
     if (!total || !isFinite(total)) total = list.length;
@@ -762,6 +887,25 @@ function fetchTX() {
 }
 
 function fetchKG() {
+  if (searchType === 'playlist') {
+    var purl = 'http://mobilecdn.kugou.com/api/v3/search/special?format=json&keyword=' + encodeURIComponent(keyword)
+      + '&page=' + page + '&pagesize=' + limit;
+    return makeRequest(purl, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    }).then(function(r) {
+      if (r.statusCode !== 200) throw new Error('KG returned ' + r.statusCode);
+      var data = r.body && r.body.data;
+      var list = [];
+      var total = 0;
+      if (data) {
+        list = data.info || data.lists || data.list || [];
+        total = Number(data.total || data.total_count || 0);
+      }
+      if (!total || !isFinite(total)) total = list.length;
+      return { list: mapCommonList(list, 'kg', searchType), total: total };
+    });
+  }
+
   if (searchType === 'song') {
     var primary = 'https://songsearch.kugou.com/song_search_v2?keyword=' + encodeURIComponent(keyword)
       + '&page=' + page
@@ -823,7 +967,9 @@ function fetchKG() {
 }
 
 function fetchKW() {
-  var ft = searchType === 'song' ? 'music' : (searchType === 'singer' ? 'artist' : 'album');
+  var ft = searchType === 'song'
+    ? 'music'
+    : (searchType === 'singer' ? 'artist' : (searchType === 'playlist' ? 'playlist' : 'album'));
   var url = 'http://search.kuwo.cn/r.s?client=kt&all=' + encodeURIComponent(keyword) + '&pn=' + (page - 1) + '&rn=' + limit + '&uid=794762570&ver=kwplayer_ar_9.2.2.1&vipver=1&show_copyright_off=1&newver=1&ft=' + ft + '&cluster=0&strategy=2012&encoding=utf8&rformat=json&vermerge=1&mobi=1&issubtitle=1';
   return makeRequest(url, {
     headers: { 'User-Agent': 'Dalvik/2.1.0 (Linux; U; Android 9;)' },
@@ -834,6 +980,7 @@ function fetchKW() {
     var total = Number(body.TOTAL || body.total || 0);
     if (searchType === 'song') list = body.abslist || body.ABSLIST || body.list || [];
     else if (searchType === 'singer') list = body.artistlist || body.ARTISTLIST || body.list || [];
+    else if (searchType === 'playlist') list = body.abslist || body.ABSLIST || body.list || [];
     else list = body.albumlist || body.ALBUMLIST || body.list || [];
     if (!total || !isFinite(total)) total = list.length;
     return { list: mapCommonList(list, 'kw', searchType), total: total };
@@ -861,7 +1008,9 @@ function fetchMG() {
     var body = r.body || {};
     var section = searchType === 'singer'
       ? (body.singerResultData || {})
-      : (searchType === 'album' ? (body.albumResultData || {}) : (body.songResultData || {}));
+      : (searchType === 'album'
+          ? (body.albumResultData || {})
+          : (searchType === 'playlist' ? (body.songListResultData || body.songlistResultData || {}) : (body.songResultData || {})));
     var list = flattenMGResultList(section.resultList || section.result || section.list || []);
     var total = Number(section.totalCount || section.total || section.count || 0);
     if (!total || !isFinite(total)) total = list.length;
@@ -881,6 +1030,9 @@ if (!keyword.trim()) {
       .then(function(list) {
         var total = Array.isArray(list) ? list.length : Number((list && list.total) || 0);
         var payloadList = Array.isArray(list) ? list : (list && list.list) || [];
+        if (searchType === 'playlist') {
+          payloadList = applyPlaylistSort(payloadList, source, sortId);
+        }
         process.stdout.write(JSON.stringify({ success: true, list: payloadList || [], total: total || 0 }));
       })
       .catch(function(err) {
@@ -893,6 +1045,187 @@ if (!keyword.trim()) {
 func (api *Router) addOnlineSearchRoutes(r chi.Router) {
 	r.Get("/online/search/hot", api.onlineHotSearch)
 	r.Get("/online/search", api.onlineSearch)
+  r.Get("/online/playlist/tags", api.onlinePlaylistTags)
+  r.Get("/online/playlist/list", api.onlinePlaylistList)
+}
+
+type onlinePlaylistTag struct {
+  ID   string `json:"id"`
+  Name string `json:"name"`
+}
+
+type playlistTagGroup struct {
+	Name string              `json:"name"`
+	List []onlinePlaylistTag `json:"list"`
+}
+
+func onlinePlaylistTagGroupsForSource(source string) []playlistTagGroup {
+	mkGroup := func(name string, tags ...string) playlistTagGroup {
+		list := make([]onlinePlaylistTag, 0, len(tags))
+		for _, t := range tags {
+			list = append(list, onlinePlaylistTag{ID: t, Name: t})
+		}
+		return playlistTagGroup{Name: name, List: list}
+	}
+
+	switch source {
+	case "wy":
+		return []playlistTagGroup{
+			mkGroup("语言", "华语", "欧美", "日语", "韩语", "粤语", "小语种"),
+			mkGroup("风格", "流行", "摇滚", "民谣", "电子", "舞曲", "说唱", "轻音乐", "爵士", "乡村", "R&B/Soul", "古典", "民族", "英伦", "金属", "朋克", "蓝调", "雷鬼", "世界音乐", "拉丁", "另类/独立", "古风", "后摇"),
+			mkGroup("场景", "清晨", "夜晚", "学习", "工作", "午休", "下午茶", "地铁", "驾车", "运动", "旅行", "散步", "酒吧"),
+			mkGroup("心情", "怀旧", "清新", "浪漫", "性感", "伤感", "治愈", "放松", "孤独", "感动", "兴奋", "快乐", "安静", "思念"),
+			mkGroup("主题", "影视原声", "ACG", "游戏", "网络歌曲", "KTV", "经典", "翻唱"),
+		}
+	case "tx":
+		return []playlistTagGroup{
+			mkGroup("语言", "华语", "欧美", "日韩", "粤语"),
+			mkGroup("风格", "流行", "摇滚", "民谣", "说唱", "电子", "舞曲", "轻音乐", "R&B", "爵士", "古典", "乡村", "蓝调"),
+			mkGroup("主题", "影视", "动漫", "游戏", "综艺"),
+			mkGroup("心情", "怀旧", "伤感", "治愈", "放松"),
+			mkGroup("场景", "旅行", "运动", "夜晚"),
+		}
+	case "kg":
+		return []playlistTagGroup{
+			mkGroup("语言", "华语", "欧美", "日韩", "粤语"),
+			mkGroup("风格", "流行", "摇滚", "民谣", "说唱", "电子", "舞曲", "DJ", "轻音乐", "古典"),
+			mkGroup("主题", "影视原声", "ACG", "游戏", "网络歌曲", "KTV", "经典", "翻唱"),
+			mkGroup("场景", "车载", "运动"),
+			mkGroup("心情", "伤感", "治愈"),
+		}
+	case "kw":
+		return []playlistTagGroup{
+			mkGroup("语言", "华语", "欧美", "日韩", "粤语"),
+			mkGroup("风格", "流行", "摇滚", "民谣", "说唱", "电子", "舞曲", "轻音乐", "R&B", "爵士", "古典", "乡村"),
+			mkGroup("主题", "影视原声", "ACG", "游戏"),
+			mkGroup("心情", "怀旧"),
+			mkGroup("场景", "学习", "工作", "驾车", "旅行", "运动", "夜晚"),
+		}
+	case "mg":
+		return []playlistTagGroup{
+			mkGroup("语言", "华语", "欧美", "日韩", "粤语"),
+			mkGroup("风格", "流行", "摇滚", "民谣", "说唱", "电子", "舞曲", "轻音乐", "R&B", "爵士", "古典", "乡村"),
+			mkGroup("主题", "影视原声", "ACG", "游戏", "网络歌曲", "经典"),
+			mkGroup("心情", "怀旧", "治愈", "放松"),
+			mkGroup("场景", "学习", "工作"),
+		}
+	default:
+		return []playlistTagGroup{
+			mkGroup("语言", "华语", "欧美"),
+			mkGroup("风格", "流行", "说唱", "轻音乐"),
+			mkGroup("主题", "影视原声"),
+		}
+	}
+}
+
+func onlinePlaylistSortsForSource(source string) []map[string]string {
+	switch source {
+	case "tx":
+		return []map[string]string{
+			{"id": "5", "name": "最热"},
+			{"id": "2", "name": "最新"},
+		}
+	case "kg":
+		return []map[string]string{
+			{"id": "5", "name": "推荐"},
+			{"id": "6", "name": "最热"},
+			{"id": "7", "name": "最新"},
+			{"id": "3", "name": "热藏"},
+			{"id": "8", "name": "飙升"},
+		}
+	case "kw":
+		return []map[string]string{
+			{"id": "new", "name": "最新"},
+			{"id": "hot", "name": "最热"},
+		}
+	case "mg":
+		return []map[string]string{
+			{"id": "15127315", "name": "推荐"},
+		}
+	default:
+		return []map[string]string{
+			{"id": "hot", "name": "最热"},
+			{"id": "new", "name": "最新"},
+		}
+	}
+}
+
+func (api *Router) onlinePlaylistTags(w http.ResponseWriter, r *http.Request) {
+	source := r.URL.Query().Get("source")
+	if source == "" {
+		source = "wy"
+	}
+
+	validSources := map[string]bool{"wy": true, "tx": true, "kg": true, "kw": true, "mg": true}
+	if !validSources[source] {
+		http.Error(w, "invalid source", http.StatusBadRequest)
+		return
+	}
+
+	tagGroups := onlinePlaylistTagGroupsForSource(source)
+
+	writeJSON(w, map[string]any{
+		"source":   source,
+		"tags":     tagGroups,
+		"sortList": onlinePlaylistSortsForSource(source),
+	})
+}
+
+func (api *Router) onlinePlaylistList(w http.ResponseWriter, r *http.Request) {
+	source := r.URL.Query().Get("source")
+	if source == "" {
+		source = "wy"
+	}
+
+	validSources := map[string]bool{"wy": true, "tx": true, "kg": true, "kw": true, "mg": true}
+	if !validSources[source] {
+		http.Error(w, "invalid source", http.StatusBadRequest)
+		return
+	}
+
+	sortID := strings.TrimSpace(r.URL.Query().Get("sortId"))
+	if sortID == "" {
+		sortID = "hot"
+	}
+
+	keyword := strings.TrimSpace(r.URL.Query().Get("keyword"))
+	if keyword == "" {
+		keyword = "热门"
+	}
+
+	page := 1
+	if raw := strings.TrimSpace(r.URL.Query().Get("page")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			page = n
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+  list, total, err := fetchOnlineSearchList(ctx, source, "playlist", keyword, page, 30, sortID)
+	if err != nil {
+		log.Warn(r.Context(), "Online playlist list failed", "source", source, "keyword", keyword, "sortId", sortID, "err", err)
+		writeJSON(w, map[string]any{
+			"source": source,
+			"keyword": keyword,
+			"sortId": sortID,
+			"page":   page,
+			"total":  0,
+			"list":   []map[string]any{},
+			"error":  err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"source": source,
+		"keyword": keyword,
+		"sortId": sortID,
+		"page":   page,
+		"total":  total,
+		"list":   list,
+	})
 }
 
 func (api *Router) onlineHotSearch(w http.ResponseWriter, r *http.Request) {
@@ -939,7 +1272,7 @@ func (api *Router) onlineSearch(w http.ResponseWriter, r *http.Request) {
 	if searchType == "" {
 		searchType = "song"
 	}
-	if searchType != "song" && searchType != "singer" && searchType != "album" {
+  if searchType != "song" && searchType != "singer" && searchType != "album" && searchType != "playlist" {
 		http.Error(w, "invalid type", http.StatusBadRequest)
 		return
 	}
@@ -967,7 +1300,7 @@ func (api *Router) onlineSearch(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
-	list, total, err := fetchOnlineSearchList(ctx, source, searchType, name, page, limit)
+  list, total, err := fetchOnlineSearchList(ctx, source, searchType, name, page, limit, "")
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(strings.ToLower(errMsg), "econnreset") {
@@ -1052,7 +1385,7 @@ func fetchHotSearchList(ctx context.Context, source string, forceRefresh bool) (
 	return result.List, nil
 }
 
-func fetchOnlineSearchList(ctx context.Context, source, searchType, keyword string, page, limit int) ([]map[string]any, int, error) {
+func fetchOnlineSearchList(ctx context.Context, source, searchType, keyword string, page, limit int, sortID string) ([]map[string]any, int, error) {
 	if _, err := exec.LookPath("node"); err != nil {
 		return nil, 0, fmt.Errorf("node not available")
 	}
@@ -1065,6 +1398,7 @@ func fetchOnlineSearchList(ctx context.Context, source, searchType, keyword stri
 		fmt.Sprintf("ND_TYPE=%s", searchType),
 		fmt.Sprintf("ND_PAGE=%d", page),
 		fmt.Sprintf("ND_LIMIT=%d", limit),
+    fmt.Sprintf("ND_SORT_ID=%s", sortID),
 		fmt.Sprintf("ND_KEYWORD_B64=%s", encodedKeyword),
 		"ND_TIMEOUT_MS=8000",
 	)
