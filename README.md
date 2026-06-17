@@ -52,7 +52,7 @@ Lx-Navidrome 是一个基于 [Navidrome](https://github.com/navidrome/navidrome)
 version: "3"
 services:
   lx-navidrome:
-    image: your-dockerhub/lx-navidrome:latest
+    image: carendule/lx-navidrome:latest
     container_name: lx-navidrome
     restart: unless-stopped
     environment:

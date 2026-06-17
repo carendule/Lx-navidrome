@@ -520,17 +520,30 @@ const normalizePlaylistItem = (item, fallbackSource) => {
     }
 }
 
-const normalizeDetailSongItem = (item, fallbackSource) => ({
-    id: String(item?.id || `${item?.name || 'song'}-${Math.random()}`),
-    name: item?.name || '未知标题',
-    singer: item?.singer || item?.artist || '--',
-    albumName: item?.albumName || item?.album || '--',
-    duration: item?.duration,
-    interval: item?.interval,
-    img: item?.img || '',
-    source: item?.source || fallbackSource,
-    meta: item?.meta || {},
-})
+const normalizeDetailSongItem = (item, fallbackSource) => {
+    const source = item?.source || fallbackSource
+    const normalized = {
+        ...(item || {}),
+        id: String(item?.id || `${item?.name || 'song'}-${Math.random()}`),
+        name: item?.name || '未知标题',
+        singer: item?.singer || item?.artist || '--',
+        albumName: item?.albumName || item?.album || '--',
+        duration: item?.duration,
+        interval: item?.interval,
+        img: item?.img || '',
+        source,
+        meta: item?.meta || {},
+    }
+
+    // Keep quality/type aliases aligned with song search payload so
+    // Online_search can reuse the same quality picker and download parser.
+    if (!normalized.types && item?._types) normalized.types = item._types
+    if (!normalized._types && item?.types) normalized._types = item.types
+    if (!normalized.qualitys && item?._qualitys) normalized.qualitys = item._qualitys
+    if (!normalized._qualitys && item?.qualitys) normalized._qualitys = item.qualitys
+
+    return normalized
+}
 
 const normalizeDetailInfo = (info, fallbackPlaylist) => {
     const playCountRaw = info?.play_count
