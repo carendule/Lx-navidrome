@@ -424,13 +424,28 @@ const useStyles = makeStyles((theme) => ({
         whiteSpace: 'nowrap',
     },
     detailDurationCell: {
-        textAlign: 'right',
+        display: 'block',
+        width: '100%',
+        justifySelf: 'start',
+        textAlign: 'left',
         fontVariantNumeric: 'tabular-nums',
         color: theme.palette.text.secondary,
     },
+    detailHeaderLeftCell: {
+        display: 'block',
+        width: '100%',
+        textAlign: 'left',
+    },
+    detailHeaderCenterCell: {
+        display: 'block',
+        width: '100%',
+        justifySelf: 'center',
+        textAlign: 'center',
+    },
     detailActionCell: {
-        display: 'flex',
-        justifyContent: 'flex-end',
+        display: 'grid',
+        justifySelf: 'center',
+        placeItems: 'center',
     },
     detailDownloadBtn: {
         width: 34,
@@ -984,19 +999,19 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog }) => {
                                 />
                             </div>
 
-                            <div className={classes.detailSongHeader}>
-                                <span className={classes.detailIdx}>#</span>
-                                <span>歌曲</span>
-                                <span className={classes.mobileHidden}>歌手</span>
-                                <span className={classes.mobileHidden}>专辑</span>
-                                <span className={classes.mobileHidden}>时长</span>
-                                <span className={classes.detailDurationCell}>操作</span>
-                            </div>
-
                             <div
                                 className={classes.detailSongListContainer}
                                 ref={setDetailScrollContainer}
                             >
+                                <div className={classes.detailSongHeader}>
+                                    <span className={classes.detailIdx}>#</span>
+                                    <span>歌曲</span>
+                                    <span className={classes.mobileHidden}>歌手</span>
+                                    <span className={classes.mobileHidden}>专辑</span>
+                                    <span className={`${classes.detailHeaderLeftCell} ${classes.mobileHidden}`}>时长</span>
+                                    <span className={classes.detailHeaderCenterCell}>操作</span>
+                                </div>
+
                                 {detailLoading ? (
                                     <div className={classes.loadingBox}>
                                         <CircularProgress size={30} />

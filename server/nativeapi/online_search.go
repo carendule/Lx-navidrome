@@ -424,12 +424,21 @@ function mapWYSong(list) {
   return (list || []).map(function(item) {
     var ar = item.ar || item.artists || [];
     var singer = ar.map(function(a) { return a && a.name; }).filter(Boolean).join('/');
+    var durationInput = item.dt;
+    if (!(typeof durationInput === 'number' && isFinite(durationInput) && durationInput > 0)) {
+      durationInput = item.duration;
+      // Some WY search payloads expose duration in centiseconds.
+      // Example: 24415 => 244.15s (about 04:04), not 24415s.
+      if (typeof durationInput === 'number' && isFinite(durationInput) && durationInput >= 10000 && durationInput < 100000) {
+        durationInput = durationInput * 10;
+      }
+    }
     return {
       id: String(item.id || ''),
       name: item.name || '',
       singer: singer,
       albumName: (item.al && item.al.name) || (item.album && item.album.name) || '',
-      duration: toDurationMs(item.dt || item.duration),
+      duration: toDurationMs(durationInput),
       img: (item.al && item.al.picUrl) || (item.album && item.album.picUrl) || '',
       source: 'wy',
       meta: item,
@@ -1193,12 +1202,21 @@ function mapWYSong(list) {
   return (list || []).map(function(item) {
     var ar = item.ar || item.artists || [];
     var singer = ar.map(function(a) { return a && a.name; }).filter(Boolean).join('/');
+    var durationInput = item.dt;
+    if (!(typeof durationInput === 'number' && isFinite(durationInput) && durationInput > 0)) {
+      durationInput = item.duration;
+      // Some WY search payloads expose duration in centiseconds.
+      // Example: 24415 => 244.15s (about 04:04), not 24415s.
+      if (typeof durationInput === 'number' && isFinite(durationInput) && durationInput >= 10000 && durationInput < 100000) {
+        durationInput = durationInput * 10;
+      }
+    }
     return {
       id: String(item.id || ''),
       name: item.name || '',
       singer: singer,
       albumName: (item.al && item.al.name) || (item.album && item.album.name) || '',
-      duration: toDurationMs(item.dt || item.duration),
+      duration: toDurationMs(durationInput),
       img: (item.al && item.al.picUrl) || (item.album && item.album.picUrl) || '',
       source: 'wy',
       meta: item,

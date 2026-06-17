@@ -99,7 +99,18 @@ export const formatCompactCount = (value) => {
 export const formatDuration = (value) => {
     const num = Number(value)
     if (!Number.isFinite(num) || num <= 0) return '--:--'
-    const totalSeconds = Math.floor(num >= 1000 ? num / 1000 : num)
+    let totalSeconds = Math.floor(num >= 1000 ? num / 1000 : num)
+
+    // Some upstream records arrive over-scaled (e.g. seconds/ms scaled again),
+    // which renders unrealistic values like 700+ minutes for normal songs.
+    // Only correct clearly abnormal long durations into a common song range.
+    if (totalSeconds > 6 * 60 * 60) {
+        const rescaledSeconds = Math.floor(totalSeconds / 1000)
+        if (rescaledSeconds > 0 && rescaledSeconds <= 30 * 60) {
+            totalSeconds = rescaledSeconds
+        }
+    }
+
     const mm = String(Math.floor(totalSeconds / 60)).padStart(2, '0')
     const ss = String(totalSeconds % 60).padStart(2, '0')
     return `${mm}:${ss}`

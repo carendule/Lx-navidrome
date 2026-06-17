@@ -250,13 +250,18 @@ const useStyles = makeStyles((theme) => ({
         whiteSpace: 'nowrap',
     },
     durationCell: {
-        textAlign: 'right',
+        textAlign: 'left',
         fontVariantNumeric: 'tabular-nums',
         color: theme.palette.text.secondary,
     },
+    headerCenterCell: {
+        display: 'block',
+        width: '100%',
+        textAlign: 'center',
+    },
     actionCell: {
         display: 'flex',
-        justifyContent: 'flex-end',
+        justifyContent: 'center',
     },
     downloadBtn: {
         width: 34,
@@ -646,7 +651,7 @@ const OnlineSongSearch = ({
                             <span className={classes.mobileHidden}>歌手</span>
                             <span className={classes.mobileHidden}>专辑</span>
                             <span className={classes.mobileHidden}>时长</span>
-                            <span className={classes.durationCell}>操作</span>
+                            <span className={classes.headerCenterCell}>操作</span>
                         </div>
 
                         {searchLoading ? (

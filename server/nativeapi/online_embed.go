@@ -483,6 +483,7 @@ func fetchOnlineEmbedLyricViaScript(ctx context.Context, source onlineSource, so
 // uses internally:
 //
 //	"ID3" header           -> MP3 with ID3v2 (most common)
+//	0xFFFx + layer=00      -> AAC ADTS (raw AAC stream)
 //	0xFF 0xFB/... frame    -> MP3 without ID3v2 (frame sync)
 //	"fLaC"                 -> FLAC
 //	"OggS"                 -> OGG container (Vorbis / Opus)
@@ -495,7 +496,7 @@ func fetchOnlineEmbedLyricViaScript(ctx context.Context, source onlineSource, so
 func onlineEmbedSniffAudioFormat(audioPath string) (format string, ext string) {
 	f, err := os.Open(audioPath)
 	if err != nil {
-		return "", ""
+		return onlineEmbedFormatFromExt(audioPath)
 	}
 	defer f.Close()
 
@@ -503,12 +504,18 @@ func onlineEmbedSniffAudioFormat(audioPath string) (format string, ext string) {
 	n, _ := io.ReadFull(f, head)
 	head = head[:n]
 	if n < 4 {
-		return "", ""
+		return onlineEmbedFormatFromExt(audioPath)
 	}
 
 	switch {
 	case bytes.HasPrefix(head, []byte("ID3")):
 		return "mp3", "mp3"
+	case n >= 2 && head[0] == 0xFF && (head[1]&0xF0) == 0xF0 && (head[1]&0x06) == 0x00:
+		// ADTS AAC frame sync. This was previously classified as MP3
+		// because both formats start with 0xFFF sync bits. Treating ADTS
+		// as MP3 makes ffmpeg fail early (`-f mp3 -i ...`) and skips the
+		// embed pipeline entirely.
+		return "aac", "m4a"
 	case n >= 2 && head[0] == 0xFF && (head[1]&0xE0) == 0xE0:
 		// 0xFF followed by 0xE? — frame sync marker for MP3.
 		return "mp3", "mp3"
@@ -526,7 +533,31 @@ func onlineEmbedSniffAudioFormat(audioPath string) (format string, ext string) {
 		// own.
 		return "mp4", "m4a"
 	}
-	return "", ""
+
+	// Some upstream files include non-audio bytes before sync headers,
+	// which can make short magic-byte sniffing inconclusive. Fall back to
+	// extension so common cases (e.g. .mp3) still go through embedding.
+	return onlineEmbedFormatFromExt(audioPath)
+}
+
+func onlineEmbedFormatFromExt(audioPath string) (format string, ext string) {
+	fileExt := strings.ToLower(strings.TrimSpace(filepath.Ext(audioPath)))
+	switch fileExt {
+	case ".mp3":
+		return "mp3", "mp3"
+	case ".flac":
+		return "flac", "flac"
+	case ".ogg", ".opus":
+		return "ogg", "ogg"
+	case ".wav":
+		return "wav", "wav"
+	case ".m4a", ".mp4", ".m4b":
+		return "mp4", "m4a"
+	case ".aac":
+		return "aac", "m4a"
+	default:
+		return "", ""
+	}
 }
 
 // onlineEmbedSongInfoHasAnyTag reports whether the songInfo map
@@ -674,6 +705,9 @@ func onlineEmbedDownloadMetadata(
 		args = append(args, "-map", "1:v", "-c:v", "copy", "-disposition:v:0", "attached_pic")
 	}
 	args = append(args, "-c:a", "copy")
+	// Copy input metadata first, then apply explicit metadata flags
+	// below so our title/artist/album/comment overrides win.
+	args = append(args, "-map_metadata", "0")
 
 	// Tag metadata. ffmpeg understands -metadata for most common
 	// tags; for MP3 it routes to ID3v2 and for FLAC it routes to
@@ -716,8 +750,13 @@ func onlineEmbedDownloadMetadata(
 		// written by our Go pass, not by ffmpeg.
 		args = append(args, "-id3v2_version", "3")
 	}
+	if format == "aac" {
+		// Raw ADTS AAC cannot carry rich tags/cover consistently.
+		// Remux to MP4/M4A so title/artist/album/cover/lyrics persist.
+		args = append(args, "-f", "mp4")
+	}
 
-	args = append(args, "-map_metadata", "0", tmpPath)
+	args = append(args, tmpPath)
 
 	// Quiet any other metadata (e.g. encoder) that ffmpeg would
 	// otherwise add. We deliberately leave the audio stream alone
@@ -728,12 +767,43 @@ func onlineEmbedDownloadMetadata(
 
 	_ = formatName // used above when constructing tmpPath
 
-	cmd := exec.CommandContext(ctx, cmdPath, args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		embedTrace(ctx, "download_metadata:ffmpeg-failed", "audio", audioPath, "err", err.Error(), "stderr", strings.TrimSpace(stderr.String()))
-		return result, audioPath, nil
+	runFFmpeg := func(ffArgs []string) (string, error) {
+		cmd := exec.CommandContext(ctx, cmdPath, ffArgs...)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		return strings.TrimSpace(stderr.String()), err
+	}
+
+	stderrText, err := runFFmpeg(args)
+	if err != nil {
+		embedTrace(ctx, "download_metadata:ffmpeg-failed", "audio", audioPath, "err", err.Error(), "stderr", stderrText)
+
+		// Some files are saved with a misleading extension (e.g. .mp3
+		// carrying AAC/MP4 content). If forced input format fails, retry
+		// once with ffmpeg auto-detection by removing the input -f flag.
+		retryArgs := make([]string, 0, len(args))
+		removedInputFormat := false
+		for i := 0; i < len(args); i++ {
+			if !removedInputFormat && i+1 < len(args) && args[i] == "-f" && args[i+1] == format {
+				removedInputFormat = true
+				i++
+				continue
+			}
+			retryArgs = append(retryArgs, args[i])
+		}
+
+		if removedInputFormat {
+			embedTrace(ctx, "download_metadata:ffmpeg-retry-autodetect", "audio", audioPath, "format", format)
+			retryStderr, retryErr := runFFmpeg(retryArgs)
+			if retryErr != nil {
+				embedTrace(ctx, "download_metadata:ffmpeg-retry-autodetect-failed", "audio", audioPath, "err", retryErr.Error(), "stderr", retryStderr)
+				return result, audioPath, nil
+			}
+			embedTrace(ctx, "download_metadata:ffmpeg-retry-autodetect-ok", "audio", audioPath)
+		} else {
+			return result, audioPath, nil
+		}
 	}
 	embedTrace(ctx, "download_metadata:ffmpeg-ok", "audio", audioPath)
 	if err := os.Rename(tmpPath, audioPath); err != nil {
@@ -752,7 +822,7 @@ func onlineEmbedDownloadMetadata(
 	// association unambiguous and matches what most
 	// tools (mp3tag, MusicBee, kid3, foobar2000) use to
 	// dispatch to the iTunes atom parser.
-	if format == "mp4" {
+	if format == "mp4" || format == "aac" {
 		newPath, renErr := onlineEmbedNormalizeM4AExtension(audioPath)
 		if renErr != nil {
 			embedTrace(ctx, "download_metadata:ext-rename-failed", "audio", audioPath, "err", renErr.Error())
