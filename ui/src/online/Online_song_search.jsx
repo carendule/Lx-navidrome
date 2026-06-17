@@ -229,8 +229,11 @@ const useStyles = makeStyles((theme) => ({
     tagRow: {
         display: 'flex',
         alignItems: 'center',
-        gap: theme.spacing(0.6),
-        minHeight: 20,
+        flexWrap: 'wrap',
+        columnGap: theme.spacing(0.6),
+        rowGap: theme.spacing(0.45),
+        minHeight: 18,
+        maxWidth: '100%',
     },
     sourceTag: {
         height: 18,
