@@ -118,6 +118,7 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
   const [showOnlineSearch, setShowOnlineSearch] = useState(false)
   const [downloadListOpen, setDownloadListOpen] = useState(false)
   const [downloadTaskState, setDownloadTaskState] = useState(emptyTaskState)
+  const [playlistSyncTasks, setPlaylistSyncTasks] = useState([])
 
   const refreshOnlineSearchVisibility = useCallback((activeRef) => {
     httpClient('/api/online/source/status')
@@ -128,6 +129,7 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
         if (!visible) {
           setDownloadListOpen(false)
           setDownloadTaskState(emptyTaskState)
+          setPlaylistSyncTasks([])
         }
       })
       .catch(() => {
@@ -135,6 +137,7 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
         setShowOnlineSearch(false)
         setDownloadListOpen(false)
         setDownloadTaskState(emptyTaskState)
+        setPlaylistSyncTasks([])
       })
   }, [])
 
@@ -142,16 +145,42 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
     (activeRef) => {
       if (!showOnlineSearch) {
         setDownloadTaskState(emptyTaskState)
+        setPlaylistSyncTasks([])
         return
       }
-      httpClient('/api/online/download/tasks')
-        .then(({ json }) => {
+      Promise.all([
+        httpClient('/api/online/download/tasks'),
+        httpClient('/api/online/playlist/sync/tasks').catch(() => ({ json: { tasks: [] } })),
+      ])
+        .then(([downloadRes, syncRes]) => {
           if (activeRef && !activeRef.current) return
+          const json = downloadRes?.json || {}
           setDownloadTaskState({
             tasks: Array.isArray(json?.tasks) ? json.tasks : [],
             activeCount: Number(json?.activeCount) || 0,
             totalSpeedText: String(json?.totalSpeedText || '0 B/s'),
             totalProgress: Number(json?.totalProgress) || 0,
+          })
+          const syncTasks = Array.isArray(syncRes?.json?.tasks)
+            ? syncRes.json.tasks
+            : []
+          if (syncTasks.length > 0) {
+            console.log('[AppBar] refreshDownloadTasks - sync tasks:', syncTasks.map(t => ({
+              id: t.id,
+              title: t.title,
+              status: t.status,
+              progress: t.progress,
+              remaining: t.remainingCount
+            })))
+          }
+          // Use incremental update to avoid full array replacement that causes flickering
+          setPlaylistSyncTasks((prev) => {
+            const prevMap = new Map((prev || []).map((t) => [t.id, t]))
+            // Keep server as the source of truth so deleted tasks are removed.
+            return syncTasks.map((task) => {
+              const prevTask = prevMap.get(task.id)
+              return prevTask ? { ...prevTask, ...task } : task
+            })
           })
         })
         .catch(() => {
@@ -212,7 +241,11 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
     }
     eventSource.addEventListener('tasks-changed', handleStreamChange)
 
-    const handleTaskChanged = () => {
+    const handleTaskChanged = (e) => {
+      // Handle playlist sync tasks from the event
+      if (e.detail?.playlistSyncTasks) {
+        setPlaylistSyncTasks(e.detail.playlistSyncTasks)
+      }
       refreshDownloadTasks(activeRef)
     }
     window.addEventListener(
@@ -250,7 +283,7 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
 
   const postTaskAction = useCallback(
     (url) => {
-      httpClient(url, {
+      return httpClient(url, {
         method: 'POST',
         body: JSON.stringify({}),
         headers: new Headers({ 'Content-Type': 'application/json' }),
@@ -262,6 +295,19 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
     [refreshDownloadTasks],
   )
 
+  const postCombinedTaskAction = useCallback(
+    (downloadURL, playlistURL) => {
+      Promise.allSettled([
+        postTaskAction(downloadURL),
+        postTaskAction(playlistURL),
+      ]).finally(() => {
+        refreshDownloadTasks()
+        window.dispatchEvent(new Event(ONLINE_DOWNLOAD_TASK_CHANGED_EVENT))
+      })
+    },
+    [postTaskAction, refreshDownloadTasks],
+  )
+
   const handleToggleDownloadList = () => {
     setDownloadListOpen((prev) => !prev)
   }
@@ -271,29 +317,45 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
   }
 
   const handleRetryAll = useCallback(() => {
-    postTaskAction('/api/online/download/tasks/retry')
-  }, [postTaskAction])
+    postCombinedTaskAction(
+      '/api/online/download/tasks/retry',
+      '/api/online/playlist/sync/tasks/retry',
+    )
+  }, [postCombinedTaskAction])
 
   const handleCancelAll = useCallback(() => {
-    postTaskAction('/api/online/download/tasks/cancel')
-  }, [postTaskAction])
+    postCombinedTaskAction(
+      '/api/online/download/tasks/cancel',
+      '/api/online/playlist/sync/tasks/cancel',
+    )
+  }, [postCombinedTaskAction])
 
   const handleClearCompleted = useCallback(() => {
-    postTaskAction('/api/online/download/tasks/clear-completed')
-  }, [postTaskAction])
+    postCombinedTaskAction(
+      '/api/online/download/tasks/clear-completed',
+      '/api/online/playlist/sync/tasks/clear-completed',
+    )
+  }, [postCombinedTaskAction])
 
   const handleClearFailed = useCallback(() => {
-    postTaskAction('/api/online/download/tasks/clear-failed')
-  }, [postTaskAction])
+    postCombinedTaskAction(
+      '/api/online/download/tasks/clear-failed',
+      '/api/online/playlist/sync/tasks/clear-failed',
+    )
+  }, [postCombinedTaskAction])
 
   const handleToggleTask = useCallback(
     (taskID) => {
       if (!taskID) return
+      const task = [...downloadTaskState.tasks, ...playlistSyncTasks].find(
+        (item) => item?.id === taskID,
+      )
+      if (task?.taskType === 'playlist_sync') return
       postTaskAction(
         `/api/online/download/task/${encodeURIComponent(taskID)}/toggle`,
       )
     },
-    [postTaskAction],
+    [downloadTaskState.tasks, playlistSyncTasks, postTaskAction],
   )
 
   const resourceDefinition = (resourceName) =>
@@ -399,7 +461,7 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
       <DownloadList
         open={downloadListOpen}
         onClose={handleCloseDownloadList}
-        tasks={downloadTaskState.tasks}
+        tasks={[...downloadTaskState.tasks, ...playlistSyncTasks]}
         totalSpeed={downloadTaskState.totalSpeedText}
         totalProgress={downloadTaskState.totalProgress}
         onRetryAll={handleRetryAll}

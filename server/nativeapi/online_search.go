@@ -2009,10 +2009,17 @@ if (mode === 'tags') {
 func (api *Router) addOnlineSearchRoutes(r chi.Router) {
 	r.Get("/online/search/hot", api.onlineHotSearch)
 	r.Get("/online/search", api.onlineSearch)
-  r.Get("/online/playlist/tags", api.onlinePlaylistTags)
-  r.Get("/online/playlist/list", api.onlinePlaylistList)
-  r.Get("/online/playlist/search", api.onlinePlaylistSearch)
-  r.Get("/online/playlist/detail", api.onlinePlaylistDetail)
+	r.Get("/online/playlist/tags", api.onlinePlaylistTags)
+	r.Get("/online/playlist/list", api.onlinePlaylistList)
+	r.Get("/online/playlist/search", api.onlinePlaylistSearch)
+	r.Get("/online/playlist/detail", api.onlinePlaylistDetail)
+	r.Post("/online/playlist/sync/start", handlePlaylistSyncStart)
+	r.Get("/online/playlist/sync/status/{taskID}", handlePlaylistSyncStatus)
+  r.Get("/online/playlist/sync/tasks", handlePlaylistSyncTasks)
+  r.Post("/online/playlist/sync/tasks/retry", handlePlaylistSyncRetryAll)
+  r.Post("/online/playlist/sync/tasks/cancel", handlePlaylistSyncCancelAll)
+  r.Post("/online/playlist/sync/tasks/clear-completed", handlePlaylistSyncClearCompleted)
+  r.Post("/online/playlist/sync/tasks/clear-failed", handlePlaylistSyncClearFailed)
 }
 
 type onlinePlaylistTag struct {

@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import {
     Card,
-
     CardContent,
     Typography,
     Button,
@@ -12,12 +11,16 @@ import {
     IconButton,
     Select,
     MenuItem,
+    Dialog,
+    DialogContent,
+    DialogTitle,
 } from '@material-ui/core'
 import { makeStyles } from '@material-ui/core/styles'
 import RefreshIcon from '@material-ui/icons/Refresh'
 import SearchIcon from '@material-ui/icons/Search'
 import ArrowBackIcon from '@material-ui/icons/ArrowBack'
 import GetAppIcon from '@material-ui/icons/GetApp'
+import SyncIcon from '@material-ui/icons/Sync'
 import { InputAdornment } from '@material-ui/core'
 import { httpClient } from '../dataProvider'
 import {
@@ -36,6 +39,24 @@ const SOURCES = [
     { key: 'kw', label: '酷我' },
     { key: 'mg', label: '咪咕' },
 ]
+
+const darkenHexColor = (hex, amount = 8) => {
+    if (typeof hex !== 'string' || !hex.startsWith('#')) return hex
+    const value = hex.slice(1)
+    if (value.length !== 6) return hex
+
+    const num = Number.parseInt(value, 16)
+    if (Number.isNaN(num)) return hex
+
+    const clamp = (n) => Math.max(0, Math.min(255, n))
+    const r = clamp(((num >> 16) & 0xff) - amount)
+    const g = clamp(((num >> 8) & 0xff) - amount)
+    const b = clamp((num & 0xff) - amount)
+
+    return `#${((1 << 24) | (r << 16) | (g << 8) | b)
+        .toString(16)
+        .slice(1)}`
+}
 
 const useStyles = makeStyles((theme) => ({
     root: {
@@ -311,6 +332,47 @@ const useStyles = makeStyles((theme) => ({
         display: 'flex',
         flexDirection: 'column',
         gap: theme.spacing(0.8),
+    },
+    detailMetaRow: {
+        minWidth: 0,
+        flex: 1,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: theme.spacing(2),
+        [theme.breakpoints.down('sm')]: {
+            width: '100%',
+            flexDirection: 'column',
+            alignItems: 'stretch',
+            gap: theme.spacing(1.2),
+        },
+    },
+    detailSyncBtn: {
+        flexShrink: 0,
+        width: 106,
+        minWidth: 106,
+        height: 52,
+        borderRadius: 10,
+        padding: theme.spacing(0.3, 0.8),
+        fontSize: '0.74rem',
+        fontWeight: 700,
+        textTransform: 'none',
+        display: 'flex',
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        gap: theme.spacing(0.45),
+        lineHeight: 1.2,
+        boxShadow: '0 8px 20px rgba(25, 118, 210, 0.25)',
+        '& .MuiSvgIcon-root': {
+            fontSize: '1rem',
+        },
+        [theme.breakpoints.down('sm')]: {
+            width: '100%',
+            minWidth: 0,
+            height: 44,
+            gap: theme.spacing(0.8),
+        },
     },
     detailTitle: {
         fontSize: '1.7rem',
@@ -602,7 +664,7 @@ const getPlaylistExternalUrl = (playlistId, source) => {
     }
 }
 
-const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog }) => {
+const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePlaylistSyncTask }) => {
     const classes = useStyles()
 
     const [source, setSource] = useState('wy')
@@ -633,6 +695,11 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog }) => {
     const [detailTotal, setDetailTotal] = useState(0)
     const [detailLoadedKey, setDetailLoadedKey] = useState('')
     const [detailScrollContainer, setDetailScrollContainer] = useState(null)
+    const [syncButtonLoading, setSyncButtonLoading] = useState(false)
+    const [syncQualityDialogOpen, setSyncQualityDialogOpen] = useState(false)
+    const [availableQualities, setAvailableQualities] = useState([])
+    const [selectedSyncQuality, setSelectedSyncQuality] = useState('')
+    const [pendingSyncData, setPendingSyncData] = useState(null)
 
     const badge = SOURCE_BADGE[source] || {}
     const playlistItems = playlistRecommendRaw
@@ -911,6 +978,131 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog }) => {
         }
     }, [detailScrollContainer, handleLoadMoreDetailSongs])
 
+    const handleStartPlaylistSync = useCallback(async () => {
+        if (!detailPlaylist || syncButtonLoading) return
+
+        setSyncButtonLoading(true)
+        try {
+            // Analyze all available qualities from songs.
+            // Reuse getQualityKeys to stay consistent with song list rendering.
+            const qualitiesSet = new Set()
+            detailSongs.forEach((song) => {
+                getQualityKeys(song).forEach((q) => {
+                    if (q) qualitiesSet.add(String(q))
+                })
+            })
+
+            const qualityOrder = ['master', 'flac24bit', 'flac', 'ape', '320k', '128k']
+            const fallbackQualities = ['320k', '128k']
+            const rawQualities = Array.from(qualitiesSet)
+            const qualities = rawQualities.length > 0 ? rawQualities : fallbackQualities
+
+            // Known quality first, unknown quality goes to the tail and stays stable.
+            const sortedQualities = [...qualities].sort((a, b) => {
+                const ai = qualityOrder.indexOf(a)
+                const bi = qualityOrder.indexOf(b)
+                if (ai === -1 && bi === -1) return String(a).localeCompare(String(b))
+                if (ai === -1) return 1
+                if (bi === -1) return -1
+                return ai - bi
+            })
+
+            setAvailableQualities(sortedQualities)
+            setSelectedSyncQuality(sortedQualities[0]) // Default to best quality
+
+            // Store sync data for later use
+            const playlistName = detailInfo?.name || detailPlaylist.name || '未命名歌单'
+            const playlistDesc = detailInfo?.desc || detailPlaylist.desc || ''
+            const playlistCover = detailInfo?.cover || detailPlaylist.cover || ''
+            const currentSource = detailPlaylist.source || source
+            const currentPlaylistId = detailPlaylist.id
+
+            setPendingSyncData({
+                playlistName,
+                playlistDesc,
+                playlistCover,
+                currentSource,
+                currentPlaylistId,
+            })
+
+            // Open quality selection dialog
+            setSyncQualityDialogOpen(true)
+            setSyncButtonLoading(false)
+        } catch (error) {
+            console.error('准备歌单同步失败:', error)
+            setDetailError('无法解析歌单音质，请稍后重试')
+            setSyncButtonLoading(false)
+        }
+    }, [detailPlaylist, detailInfo, source, detailSongs, syncButtonLoading])
+
+    const handleConfirmSyncQuality = useCallback(async () => {
+        if (!pendingSyncData || !selectedSyncQuality) return
+
+        setSyncQualityDialogOpen(false)
+        setSyncButtonLoading(true)
+
+        try {
+            console.log('[playlist-sync] confirm sync quality', {
+                pendingSyncData,
+                selectedSyncQuality,
+                detailSongsCount: detailSongs.length,
+                detailTotal,
+                selectedQualityMeta: QUALITY_META[selectedSyncQuality] || null,
+            })
+
+            // Create sync task immediately so it appears in download list first.
+            const syncTask = {
+                id: `sync-${Date.now()}-${Math.random()}`,
+                taskType: 'playlist_sync',
+                title: pendingSyncData.playlistName,
+                cover: pendingSyncData.playlistCover,
+                source: pendingSyncData.currentSource,
+                sourceName: pendingSyncData.currentSource,
+                status: 'syncing',
+                progress: 0,
+                remainingCount: detailTotal || detailSongs.length,
+                currentSongTitle: '创建歌单中',
+                playlistId: pendingSyncData.currentPlaylistId,
+                navidromPlaylistId: '',
+                sourceType: pendingSyncData.currentSource,
+                selectedQuality: selectedSyncQuality,
+                playlistComment: pendingSyncData.playlistDesc || '',
+            }
+
+            if (onCreatePlaylistSyncTask) {
+                console.log('[playlist-sync] emit create task', {
+                    syncTask,
+                    detailSongsCount: detailSongs.length,
+                })
+                onCreatePlaylistSyncTask(syncTask, detailSongs)
+                console.log('[playlist-sync] create task callback returned', {
+                    taskId: syncTask.id,
+                })
+            } else {
+                console.warn('[playlist-sync] onCreatePlaylistSyncTask missing', {
+                    syncTask,
+                })
+            }
+
+            setSyncButtonLoading(false)
+            setPendingSyncData(null)
+        } catch (error) {
+            console.error('[playlist-sync] confirm sync failed', {
+                error,
+                message: error?.message,
+                stack: error?.stack,
+                pendingSyncData,
+                selectedSyncQuality,
+            })
+            setSyncButtonLoading(false)
+        }
+    }, [pendingSyncData, selectedSyncQuality, detailTotal, detailSongs, onCreatePlaylistSyncTask])
+
+    const handleCloseSyncQualityDialog = useCallback(() => {
+        setSyncQualityDialogOpen(false)
+        setPendingSyncData(null)
+    }, [])
+
     const handleBackFromDetail = useCallback(() => {
         setDetailPlaylist(null)
         setDetailInfo(null)
@@ -946,35 +1138,47 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog }) => {
                                     src={(detailInfo?.cover || detailPlaylist.cover) || undefined}
                                     className={classes.detailCover}
                                 />
-                                <div className={classes.detailMeta}>
-                                    <Typography className={classes.detailTitle}>
-                                        {detailInfo?.name || detailPlaylist.name || '未命名歌单'}
-                                    </Typography>
-                                    <div className={classes.detailSubMeta}>
-                                        <Typography variant="subtitle2" color="textSecondary">
-                                            {detailInfo?.author || detailPlaylist.author || '--'}
+                                <div className={classes.detailMetaRow}>
+                                    <div className={classes.detailMeta}>
+                                        <Typography className={classes.detailTitle}>
+                                            {detailInfo?.name || detailPlaylist.name || '未命名歌单'}
                                         </Typography>
-                                        <Typography variant="body2" color="textSecondary">
-                                            {`${detailTotal || detailPlaylist.songCount || 0} 首歌曲`}
+                                        <div className={classes.detailSubMeta}>
+                                            <Typography variant="subtitle2" color="textSecondary">
+                                                {detailInfo?.author || detailPlaylist.author || '--'}
+                                            </Typography>
+                                            <Typography variant="body2" color="textSecondary">
+                                                {`${detailTotal || detailPlaylist.songCount || 0} 首歌曲`}
+                                            </Typography>
+                                            <Typography variant="body2" color="textSecondary">
+                                                {`${detailInfo?.playCountText || detailPlaylist.playCountText || '0'} 次收听`}
+                                            </Typography>
+                                        </div>
+                                        <Typography
+                                            className={classes.detailIdText}
+                                            variant="caption"
+                                            component={detailPlaylistUrl ? 'a' : 'span'}
+                                            href={detailPlaylistUrl || undefined}
+                                            target={detailPlaylistUrl ? '_blank' : undefined}
+                                            rel={detailPlaylistUrl ? 'noreferrer noopener' : undefined}
+                                            title={detailPlaylistUrl ? '打开官方歌单页面' : undefined}
+                                        >
+                                            {`歌单ID：${detailPlaylist.id || '--'} (${(SOURCE_BADGE[detailPlaylist.source || source] || {}).name || (detailPlaylist.source || source || '').toUpperCase()})`}
                                         </Typography>
-                                        <Typography variant="body2" color="textSecondary">
-                                            {`${detailInfo?.playCountText || detailPlaylist.playCountText || '0'} 次收听`}
+                                        <Typography className={classes.detailDesc} variant="body2">
+                                            {detailInfo?.desc || detailPlaylist.desc || '该歌单暂无简介'}
                                         </Typography>
                                     </div>
-                                    <Typography
-                                        className={classes.detailIdText}
-                                        variant="caption"
-                                        component={detailPlaylistUrl ? 'a' : 'span'}
-                                        href={detailPlaylistUrl || undefined}
-                                        target={detailPlaylistUrl ? '_blank' : undefined}
-                                        rel={detailPlaylistUrl ? 'noreferrer noopener' : undefined}
-                                        title={detailPlaylistUrl ? '打开官方歌单页面' : undefined}
+                                    <Button
+                                        variant="contained"
+                                        color="primary"
+                                        className={classes.detailSyncBtn}
+                                        onClick={handleStartPlaylistSync}
+                                        disabled={syncButtonLoading}
                                     >
-                                        {`歌单ID：${detailPlaylist.id || '--'} (${(SOURCE_BADGE[detailPlaylist.source || source] || {}).name || (detailPlaylist.source || source || '').toUpperCase()})`}
-                                    </Typography>
-                                    <Typography className={classes.detailDesc} variant="body2">
-                                        {detailInfo?.desc || detailPlaylist.desc || '该歌单暂无简介'}
-                                    </Typography>
+                                        <SyncIcon />
+                                        同步到Navidrome
+                                    </Button>
                                 </div>
                             </div>
                         </CardContent>
@@ -1371,6 +1575,88 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog }) => {
                     </Card>
                 </>
             )}
+
+            {/* Quality Selection Dialog */}
+            <Dialog
+                open={syncQualityDialogOpen}
+                onClose={handleCloseSyncQualityDialog}
+                maxWidth="sm"
+                fullWidth
+            >
+                <DialogTitle>选择同步音质</DialogTitle>
+                <DialogContent style={{ paddingTop: 16 }}>
+                    <Typography variant="body2" color="textSecondary" style={{ marginBottom: 16 }}>
+                        该歌单支持以下音质，建议优先选择较高音质
+                    </Typography>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {availableQualities.map((quality) => {
+                            const qualityMeta = QUALITY_META[quality] || {}
+                            const isSelected = selectedSyncQuality === quality
+                            const chipBg = qualityMeta.bg || '#dce8ff'
+                            const chipFg = qualityMeta.color || '#2c4ca3'
+                            const selectedBg = darkenHexColor(chipBg, 8)
+                            const selectedFg = darkenHexColor(chipFg, 8)
+                            const selectedChipBg = darkenHexColor(chipBg, 58)
+                            const selectedChipFg = darkenHexColor(chipFg, 54)
+
+                            return (
+                                <Button
+                                    key={quality}
+                                    variant={isSelected ? 'contained' : 'outlined'}
+                                    color={isSelected ? 'primary' : 'default'}
+                                    onClick={() => setSelectedSyncQuality(quality)}
+                                    style={{
+                                        justifyContent: 'flex-start',
+                                        padding: '12px 16px',
+                                        backgroundColor: isSelected ? selectedBg : 'transparent',
+                                        color: isSelected ? selectedFg : '#5f5f5f',
+                                        borderColor: isSelected ? selectedFg : '#9a9a9a',
+                                    }}
+                                >
+                                    <Chip
+                                        label={qualityMeta.label || quality}
+                                        size="small"
+                                        style={{
+                                            backgroundColor: isSelected ? selectedChipBg : chipBg,
+                                            color: isSelected ? selectedChipFg : chipFg,
+                                            border: 'none',
+                                            marginRight: 8,
+                                        }}
+                                    />
+                                    <span>{qualityMeta.label || quality}</span>
+                                </Button>
+                            )
+                        })}
+                    </div>
+
+                    <Typography
+                        variant="caption"
+                        color="textSecondary"
+                        style={{ display: 'block', marginTop: 16 }}
+                    >
+                        如果选定音质下载失败，系统将自动降级至其他可用音质
+                    </Typography>
+
+                    <div style={{ display: 'flex', gap: 8, marginTop: 24, justifyContent: 'flex-end' }}>
+                        <Button
+                            variant="outlined"
+                            onClick={handleCloseSyncQualityDialog}
+                            disabled={syncButtonLoading}
+                        >
+                            取消
+                        </Button>
+                        <Button
+                            variant="contained"
+                            color="primary"
+                            onClick={handleConfirmSyncQuality}
+                            disabled={syncButtonLoading || !selectedSyncQuality}
+                        >
+                            {syncButtonLoading ? <CircularProgress size={20} /> : '确认同步'}
+                        </Button>
+                    </div>
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }

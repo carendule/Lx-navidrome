@@ -14,8 +14,10 @@ import { baseUrl } from '../utils'
 import { fetchOnlineNameTemplate } from './Online_source_settings_api'
 import OnlineSongSearch from './Online_song_search'
 import OnlinePlaylistSearch from './Online_playlist_search'
+import subsonic from '../subsonic'
 
 const ONLINE_DOWNLOAD_TASK_CHANGED_EVENT = 'nd:online-download-task-changed'
+const ONLINE_PLAYLIST_SYNC_TASKS_CLEARED_EVENT = 'nd:playlist-sync-tasks-cleared'
 
 const VIEW_MODES = {
   song: 'song',
@@ -406,6 +408,7 @@ const OnlineSearch = () => {
   const [browserDownloadSourceName, setBrowserDownloadSourceName] = useState('')
   const [serverDownloadLoading, setServerDownloadLoading] = useState(false)
   const [serverDownloadStatus, setServerDownloadStatus] = useState('idle')
+  const [playlistSyncTasks, setPlaylistSyncTasks] = useState([])
 
   useEffect(() => {
     if (viewMode === VIEW_MODES.playlist) {
@@ -449,6 +452,236 @@ const OnlineSearch = () => {
 
   const handleCloseDownloadErrorDialog = useCallback(() => {
     setDownloadErrorOpen(false)
+  }, [])
+
+  const handleCreatePlaylistSyncTask = useCallback(
+    async (syncTask, detailSongs) => {
+      if (!syncTask) return
+
+      const taskId = syncTask.id
+
+      console.log('[playlist-sync] receive sync task', {
+        taskId,
+        syncTask,
+        detailSongsCount: Array.isArray(detailSongs) ? detailSongs.length : 0,
+      })
+
+      // Add sync task to local state
+      setPlaylistSyncTasks((prev) => [...prev, syncTask])
+      console.log('[playlist-sync] task appended to local state', {
+        taskId,
+        totalTasks: playlistSyncTasks.length + 1,
+        status: syncTask.status,
+      })
+
+      let navidromPlaylistId = syncTask.navidromPlaylistId
+
+      // Ensure playlist exists before starting sync. This keeps task visible
+      // in the UI even if playlist creation fails.
+      if (!navidromPlaylistId) {
+        try {
+          console.log('[playlist-sync] creating navidrome playlist', {
+            name: syncTask.title || '未命名歌单',
+            comment: syncTask.playlistComment || '',
+            playlistId: syncTask.playlistId,
+            source: syncTask.source,
+            selectedQuality: syncTask.selectedQuality,
+            songsCount: Array.isArray(detailSongs) ? detailSongs.length : 0,
+          })
+
+          const createPlaylistUrl = subsonic.url('createPlaylist', null, {
+            name: syncTask.title || '未命名歌单',
+          })
+          console.log('[playlist-sync] create playlist request url', {
+            createPlaylistUrl,
+          })
+
+          const createPlaylistRes = await httpClient(createPlaylistUrl, {
+            method: 'GET',
+          })
+          console.log('[playlist-sync] create playlist response', {
+            status: createPlaylistRes?.status,
+            ok: createPlaylistRes?.status >= 200 && createPlaylistRes?.status < 300,
+            response: createPlaylistRes,
+          })
+
+          navidromPlaylistId =
+            createPlaylistRes?.json?.id ||
+            createPlaylistRes?.json?.playlist?.id ||
+            createPlaylistRes?.json?.['subsonic-response']?.playlist?.id
+          console.log('[playlist-sync] create playlist response json', {
+            json: createPlaylistRes?.json,
+            navidromPlaylistId,
+          })
+          if (!navidromPlaylistId) {
+            console.error('[playlist-sync] playlist id missing', {
+              responseJson: createPlaylistRes?.json,
+              responseStatus: createPlaylistRes?.status,
+              syncTask,
+            })
+            throw new Error('playlist_id_missing')
+          }
+
+          setPlaylistSyncTasks((prev) =>
+            prev.map((t) =>
+              t.id === taskId
+                ? {
+                  ...t,
+                  navidromPlaylistId,
+                  currentSongTitle: '准备中',
+                }
+                : t,
+            ),
+          )
+          console.log('[playlist-sync] local sync task updated with playlist id', {
+            taskId,
+            navidromPlaylistId,
+          })
+        } catch (error) {
+          console.error('[playlist-sync] failed to create navidrome playlist', {
+            error,
+            message: error?.message,
+            stack: error?.stack,
+            syncTask,
+            taskId,
+            songsCount: Array.isArray(detailSongs) ? detailSongs.length : 0,
+          })
+          setPlaylistSyncTasks((prev) =>
+            prev.map((t) =>
+              t.id === taskId
+                ? {
+                  ...t,
+                  status: 'sync-error',
+                  currentSongTitle: '创建歌单失败',
+                }
+                : t,
+            ),
+          )
+          console.error('Failed to create Navidrome playlist for sync:', error)
+          return
+        }
+      }
+
+      // Notify backend to start the sync
+      try {
+        console.log('[playlist-sync] starting sync', {
+          taskId,
+          navidromPlaylistId,
+          preferredQuality: syncTask.selectedQuality || '',
+          songsCount: Array.isArray(detailSongs) ? detailSongs.length : 0,
+          firstSong: detailSongs?.[0] || null,
+        })
+
+        const startRes = await httpClient('/api/online/playlist/sync/start', {
+          method: 'POST',
+          body: JSON.stringify({
+            taskId,
+            navidromPlaylistId,
+            playlistName: syncTask.title || '',
+            playlistCover: syncTask.cover || '',
+            songs: detailSongs,
+            preferredQuality: syncTask.selectedQuality || '',
+          }),
+        })
+        console.log('[playlist-sync] sync start response', {
+          status: startRes?.status,
+          ok: startRes?.status >= 200 && startRes?.status < 300,
+          response: startRes,
+        })
+      } catch (error) {
+        console.error('[playlist-sync] failed to start sync', {
+          error,
+          message: error?.message,
+          stack: error?.stack,
+          taskId,
+          navidromPlaylistId,
+          selectedQuality: syncTask.selectedQuality,
+          songsCount: Array.isArray(detailSongs) ? detailSongs.length : 0,
+        })
+        setPlaylistSyncTasks((prev) =>
+          prev.map((t) =>
+            t.id === taskId
+              ? {
+                ...t,
+                status: 'sync-error',
+                currentSongTitle: '同步启动失败',
+              }
+              : t,
+          ),
+        )
+        console.error('Failed to start playlist sync:', error)
+      }
+    },
+    []
+  )
+
+  // Remove local polling; AppBar now handles centralized polling to avoid duplicate efforts
+
+  // No need to emit; AppBar polls and broadcasts for both download and sync tasks
+
+  useEffect(() => {
+    let mounted = true
+    // Fetch sync tasks once on mount to restore any in-progress tasks
+    httpClient('/api/online/playlist/sync/tasks')
+      .then((response) => {
+        if (!mounted) return
+        const tasks = Array.isArray(response?.json?.tasks)
+          ? response.json.tasks
+          : []
+        if (tasks.length > 0) {
+          setPlaylistSyncTasks(tasks)
+        }
+      })
+      .catch(() => { })
+
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  // Listen for AppBar's sync task updates to avoid duplicate polling
+  useEffect(() => {
+    const handleTaskChanged = (e) => {
+      if (e.detail?.playlistSyncTasks) {
+        setPlaylistSyncTasks(e.detail.playlistSyncTasks)
+      }
+    }
+    window.addEventListener(
+      ONLINE_DOWNLOAD_TASK_CHANGED_EVENT,
+      handleTaskChanged,
+    )
+
+    return () => {
+      window.removeEventListener(
+        ONLINE_DOWNLOAD_TASK_CHANGED_EVENT,
+        handleTaskChanged,
+      )
+    }
+  }, [])
+
+  useEffect(() => {
+    const handlePlaylistSyncTasksCleared = (event) => {
+      const clearedIds = Array.isArray(event?.detail?.ids)
+        ? event.detail.ids
+        : []
+      if (clearedIds.length === 0) return
+
+      setPlaylistSyncTasks((prev) =>
+        prev.filter((task) => !clearedIds.includes(task?.id)),
+      )
+    }
+
+    window.addEventListener(
+      ONLINE_PLAYLIST_SYNC_TASKS_CLEARED_EVENT,
+      handlePlaylistSyncTasksCleared,
+    )
+
+    return () => {
+      window.removeEventListener(
+        ONLINE_PLAYLIST_SYNC_TASKS_CLEARED_EVENT,
+        handlePlaylistSyncTasksCleared,
+      )
+    }
   }, [])
 
   const qualityOptions = selectedItem ? getQualityOptions(selectedItem) : []
@@ -672,6 +905,7 @@ const OnlineSearch = () => {
           <OnlinePlaylistSearch
             active={viewMode === VIEW_MODES.playlist}
             onOpenDownloadDialog={handleOpenDownloadDialog}
+            onCreatePlaylistSyncTask={handleCreatePlaylistSyncTask}
           />
         </div>
       )}
