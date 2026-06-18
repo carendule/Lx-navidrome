@@ -41,6 +41,7 @@ type playlistSyncTask struct {
 	CompletedSongs       []string // List of song IDs that have been added to Navidrome
 	CurrentSongReused    bool     // Whether current song was matched from library
 	FailedSongs          []string
+	FailedSongDetails    []playlistSyncFailedSong
 	DownloadQueue        []map[string]any
 	DownloadTaskIDMap    map[string]int // Maps download task ID to song index
 	CurrentDownloadID    string
@@ -66,30 +67,37 @@ type playlistSyncStartRequest struct {
 	PreferredQuality   string           `json:"preferredQuality,omitempty"`
 }
 
+type playlistSyncFailedSong struct {
+	Name   string `json:"name"`
+	Singer string `json:"singer"`
+}
+
 type playlistSyncStatusResponse struct {
-	ID                string `json:"id"`
-	Status            string `json:"status"`
-	Progress          int    `json:"progress"`
-	RemainingCount    int    `json:"remainingCount"`
-	CurrentSongTitle  string `json:"currentSongTitle"`
-	SourceName        string `json:"sourceName"`
-	CurrentSongReused bool   `json:"currentSongReused"`
+	ID                string                   `json:"id"`
+	Status            string                   `json:"status"`
+	Progress          int                      `json:"progress"`
+	RemainingCount    int                      `json:"remainingCount"`
+	CurrentSongTitle  string                   `json:"currentSongTitle"`
+	SourceName        string                   `json:"sourceName"`
+	CurrentSongReused bool                     `json:"currentSongReused"`
+	FailedSongDetails []playlistSyncFailedSong `json:"failedSongDetails,omitempty"`
 }
 
 type playlistSyncTaskView struct {
-	ID                string `json:"id"`
-	TaskType          string `json:"taskType"`
-	Title             string `json:"title"`
-	Cover             string `json:"cover"`
-	Status            string `json:"status"`
-	Progress          int    `json:"progress"`
-	RemainingCount    int    `json:"remainingCount"`
-	CurrentSongTitle  string `json:"currentSongTitle"`
-	SourceName        string `json:"sourceName"`
-	Source            string `json:"source"`
-	CurrentSongReused bool   `json:"currentSongReused"`
-	CreatedAt         string `json:"createdAt"`
-	UpdatedAt         string `json:"updatedAt"`
+	ID                string                   `json:"id"`
+	TaskType          string                   `json:"taskType"`
+	Title             string                   `json:"title"`
+	Cover             string                   `json:"cover"`
+	Status            string                   `json:"status"`
+	Progress          int                      `json:"progress"`
+	RemainingCount    int                      `json:"remainingCount"`
+	CurrentSongTitle  string                   `json:"currentSongTitle"`
+	SourceName        string                   `json:"sourceName"`
+	Source            string                   `json:"source"`
+	CurrentSongReused bool                     `json:"currentSongReused"`
+	FailedSongDetails []playlistSyncFailedSong `json:"failedSongDetails,omitempty"`
+	CreatedAt         string                   `json:"createdAt"`
+	UpdatedAt         string                   `json:"updatedAt"`
 }
 
 var playlistSyncTasks = struct {
@@ -154,6 +162,25 @@ func (t *playlistSyncTask) addFailedSong(songTitle string) {
 	t.UpdatedAt = time.Now()
 }
 
+func appendFailedSongDetail(task *playlistSyncTask, song map[string]any) {
+	if task == nil {
+		return
+	}
+	name, singer, _ := playlistSyncSongInfoFields(song)
+	if strings.TrimSpace(name) == "" {
+		name = strings.TrimSpace(task.CurrentSongTitle)
+	}
+	if strings.TrimSpace(name) == "" {
+		return
+	}
+	for _, item := range task.FailedSongDetails {
+		if item.Name == name && item.Singer == singer {
+			return
+		}
+	}
+	task.FailedSongDetails = append(task.FailedSongDetails, playlistSyncFailedSong{Name: name, Singer: singer})
+}
+
 func handlePlaylistSyncStart(w http.ResponseWriter, r *http.Request) {
 	var req playlistSyncStartRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -206,6 +233,7 @@ func handlePlaylistSyncStart(w http.ResponseWriter, r *http.Request) {
 			RemainingCount:       len(req.Songs),
 			CompletedSongs:       []string{},
 			FailedSongs:          []string{},
+			FailedSongDetails:    []playlistSyncFailedSong{},
 			Songs:                req.Songs,
 			DownloadTaskIDMap:    make(map[string]int),
 			CreatedAt:            time.Now(),
@@ -273,6 +301,7 @@ func handlePlaylistSyncStatus(w http.ResponseWriter, r *http.Request) {
 		CurrentSongTitle:  task.CurrentSongTitle,
 		SourceName:        task.SourceName,
 		CurrentSongReused: task.CurrentSongReused,
+		FailedSongDetails: append([]playlistSyncFailedSong(nil), task.FailedSongDetails...),
 	}
 	task.mu.RUnlock()
 
@@ -316,6 +345,7 @@ func handlePlaylistSyncTasks(w http.ResponseWriter, _ *http.Request) {
 			SourceName:        task.SourceName,
 			Source:            source,
 			CurrentSongReused: task.CurrentSongReused,
+			FailedSongDetails: append([]playlistSyncFailedSong(nil), task.FailedSongDetails...),
 			CreatedAt:         task.CreatedAt.UTC().Format(time.RFC3339),
 			UpdatedAt:         task.UpdatedAt.UTC().Format(time.RFC3339),
 		}
@@ -351,6 +381,7 @@ func handlePlaylistSyncRetryAll(w http.ResponseWriter, _ *http.Request) {
 		task.PauseRequested = false
 		task.CurrentSongTitle = "重试中"
 		task.FailedSongs = []string{}
+		task.FailedSongDetails = []playlistSyncFailedSong{}
 		task.RemainingCount = len(task.Songs) - len(task.CompletedSongs)
 		task.Progress = int((len(task.CompletedSongs) * 100) / len(task.Songs))
 		task.UpdatedAt = now
@@ -492,8 +523,8 @@ func syncPlaylistSongs(task *playlistSyncTask) {
 	}
 
 	for idx, song := range task.Songs {
-		if task.Status == "sync-error" || task.Status == "paused" || task.PauseRequested {
-			log.Debug(nil, "Sync error detected, breaking loop", "taskID", task.ID)
+		if task.Status == "paused" || task.PauseRequested || task.Status == "canceled" {
+			log.Debug(nil, "Sync canceled/paused, breaking loop", "taskID", task.ID)
 			break
 		}
 
@@ -524,10 +555,11 @@ func syncPlaylistSongs(task *playlistSyncTask) {
 			if err := addMediaToPlaylist(task.RequestUser, task.NavidromPlaylistID, matchedMediaID); err != nil {
 				log.Error(nil, "Failed to add existing library song to Navidrome playlist", "error", err, "songName", task.CurrentSongTitle, "playlistId", task.NavidromPlaylistID, "mediaId", matchedMediaID)
 				task.FailedSongs = append(task.FailedSongs, task.CurrentSongTitle)
-				task.Status = "sync-error"
+				appendFailedSongDetail(task, song)
+				task.Status = "syncing"
 				task.UpdatedAt = time.Now()
 				broadcastPlaylistSyncChange()
-				break
+				continue
 			}
 
 			task.CompletedSongs = append(task.CompletedSongs, songID)
@@ -562,10 +594,11 @@ func syncPlaylistSongs(task *playlistSyncTask) {
 			}
 			log.Error(nil, "Failed to download song for playlist sync after quality fallback", err, "songName", task.CurrentSongTitle)
 			task.FailedSongs = append(task.FailedSongs, task.CurrentSongTitle)
-			task.Status = "sync-error"
+			appendFailedSongDetail(task, song)
+			task.Status = "syncing"
 			task.UpdatedAt = time.Now()
 			broadcastPlaylistSyncChange()
-			break
+			continue
 		}
 		if resolvedSourceName != "" {
 			task.SourceName = resolvedSourceName
@@ -577,10 +610,11 @@ func syncPlaylistSongs(task *playlistSyncTask) {
 		if err := addSongToNavidromPlaylist(task.RequestUser, task.NavidromPlaylistID, song, downloadedFilePath); err != nil {
 			log.Error(nil, "Failed to add song to Navidrome playlist", "error", err, "songName", task.CurrentSongTitle, "playlistId", task.NavidromPlaylistID)
 			task.FailedSongs = append(task.FailedSongs, task.CurrentSongTitle)
-			task.Status = "sync-error"
+			appendFailedSongDetail(task, song)
+			task.Status = "syncing"
 			task.UpdatedAt = time.Now()
 			broadcastPlaylistSyncChange()
-			break
+			continue
 		}
 
 		task.CompletedSongs = append(task.CompletedSongs, songID)
@@ -599,12 +633,19 @@ func syncPlaylistSongs(task *playlistSyncTask) {
 	// Ensure final status is set correctly
 	log.Debug(nil, "Sync loop finished", "taskID", task.ID, "status", task.Status, "remaining", task.RemainingCount, "completed", len(task.CompletedSongs), "total", len(task.Songs))
 
-	if task.Status == "syncing" {
-		task.Status = "sync-completed"
-		task.Progress = 100
-		task.CurrentSongTitle = "完成"
-		task.RemainingCount = 0
-		log.Debug(nil, "Setting task to sync-completed", "taskID", task.ID)
+	if task.Status != "canceled" && task.Status != "paused" {
+		if len(task.FailedSongDetails) > 0 {
+			task.Status = "sync-error"
+			task.CurrentSongTitle = "本轮完成，部分歌曲失败"
+			task.RemainingCount = len(task.FailedSongDetails)
+			log.Debug(nil, "Setting task to sync-error after full round", "taskID", task.ID, "failedCount", len(task.FailedSongDetails))
+		} else {
+			task.Status = "sync-completed"
+			task.Progress = 100
+			task.CurrentSongTitle = "完成"
+			task.RemainingCount = 0
+			log.Debug(nil, "Setting task to sync-completed", "taskID", task.ID)
+		}
 	}
 
 	task.UpdatedAt = time.Now()

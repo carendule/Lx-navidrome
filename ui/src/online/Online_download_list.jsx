@@ -10,6 +10,13 @@ import {
   Divider,
   LinearProgress,
   Button,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  List,
+  ListItem,
+  ListItemText,
 } from '@material-ui/core'
 import { makeStyles } from '@material-ui/core/styles'
 
@@ -270,6 +277,27 @@ const formatPlaylistSyncSubline = (task) => {
   return `${songTitle} ${sourceLabel}`.trim()
 }
 
+const normalizeFailedSongDetails = (task) => {
+  const details = Array.isArray(task?.failedSongDetails)
+    ? task.failedSongDetails
+    : []
+  if (details.length > 0) {
+    return details
+      .map((item) => ({
+        name: String(item?.name || '').trim(),
+        singer: String(item?.singer || '').trim() || '未知歌手',
+      }))
+      .filter((item) => item.name)
+  }
+  const names = Array.isArray(task?.failedSongs) ? task.failedSongs : []
+  return names
+    .map((name) => ({
+      name: String(name || '').trim(),
+      singer: '未知歌手',
+    }))
+    .filter((item) => item.name)
+}
+
 const DownloadList = ({
   open,
   onClose,
@@ -286,6 +314,34 @@ const DownloadList = ({
   const translate = useTranslate()
   const taskOrderRef = React.useRef(new Map())
   const nextOrderRef = React.useRef(1)
+  const [failedTask, setFailedTask] = React.useState(null)
+
+  const failedRows = React.useMemo(() => normalizeFailedSongDetails(failedTask), [failedTask])
+
+  const handleDownloadFailedList = React.useCallback(() => {
+    if (!failedTask) return
+    const rows = normalizeFailedSongDetails(failedTask)
+    const title = String(failedTask?.title || '歌单同步任务').trim()
+    const lines = [
+      `歌单同步失败列表`,
+      `任务名称: ${title}`,
+      `导出时间: ${new Date().toLocaleString()}`,
+      '',
+      '序号\t歌曲名称\t歌手',
+      ...rows.map((row, idx) => `${idx + 1}\t${row.name}\t${row.singer || '未知歌手'}`),
+    ]
+    const txt = lines.join('\n')
+    const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const safeTitle = title.replace(/[\\/:*?"<>|]+/g, '_').slice(0, 60) || 'playlist_sync'
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${safeTitle}_failed_songs.txt`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }, [failedTask])
 
   const displayTasks = React.useMemo(() => {
     return Array.isArray(tasks) ? tasks : []
@@ -414,14 +470,27 @@ const DownloadList = ({
             {sortedTasks.map((task) => (
               (() => {
                 const isPlaylistSyncTask = task.taskType === 'playlist_sync'
+                const isFailedPlaylistSyncTask =
+                  isPlaylistSyncTask && task.status === 'sync-error'
                 const isToggleable = !isPlaylistSyncTask
+                const failedCount = normalizeFailedSongDetails(task).length
+
+                const handleTaskClick = () => {
+                  if (isFailedPlaylistSyncTask) {
+                    setFailedTask(task)
+                    return
+                  }
+                  if (isToggleable && onToggleTask) {
+                    onToggleTask(task.id)
+                  }
+                }
 
                 return (
                   <Box
                     key={task.id}
                     className={classes.taskCard}
-                    onClick={isToggleable ? () => onToggleTask && onToggleTask(task.id) : undefined}
-                    style={{ cursor: isToggleable ? 'pointer' : 'default' }}
+                    onClick={isToggleable || isFailedPlaylistSyncTask ? handleTaskClick : undefined}
+                    style={{ cursor: isToggleable || isFailedPlaylistSyncTask ? 'pointer' : 'default' }}
                   >
                     <Box className={classes.taskCardContent}>
                       <Box className={classes.taskMain}>
@@ -474,7 +543,9 @@ const DownloadList = ({
                         />
                         {task.taskType === 'playlist_sync' && (
                           <Typography className={classes.remainText}>
-                            {`剩余: ${Math.max(0, Number(task.remainingCount) || 0)}首`}
+                            {task.status === 'sync-error'
+                              ? `失败: ${failedCount}首`
+                              : `剩余: ${Math.max(0, Number(task.remainingCount) || 0)}首`}
                           </Typography>
                         )}
                       </Box>
@@ -492,6 +563,51 @@ const DownloadList = ({
               })()
             ))}
           </Box>
+
+          <Dialog
+            open={Boolean(failedTask)}
+            onClose={() => setFailedTask(null)}
+            fullWidth
+            maxWidth="sm"
+          >
+            <DialogTitle>
+              歌单同步失败列表
+            </DialogTitle>
+            <DialogContent dividers>
+              <Typography variant="body2" color="textSecondary" gutterBottom>
+                {`任务: ${String(failedTask?.title || '未知任务')}`}
+              </Typography>
+              {failedRows.length === 0 ? (
+                <Typography variant="body2" color="textSecondary">
+                  暂无失败歌曲明细
+                </Typography>
+              ) : (
+                <List dense>
+                  {failedRows.map((row, index) => (
+                    <ListItem key={`${row.name}-${row.singer}-${index}`} divider>
+                      <ListItemText
+                        primary={`${index + 1}. ${row.name}`}
+                        secondary={`歌手: ${row.singer || '未知歌手'}`}
+                      />
+                    </ListItem>
+                  ))}
+                </List>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setFailedTask(null)}>
+                关闭
+              </Button>
+              <Button
+                color="primary"
+                variant="contained"
+                onClick={handleDownloadFailedList}
+                disabled={failedRows.length === 0}
+              >
+                下载失败列表 txt
+              </Button>
+            </DialogActions>
+          </Dialog>
         </Paper>
       </Box>
     </Fade>
@@ -518,8 +634,16 @@ DownloadList.propTypes = {
       status: PropTypes.string,
       title: PropTypes.string,
       currentSongTitle: PropTypes.string,
+      currentSongReused: PropTypes.bool,
       remainingCount: PropTypes.number,
       cover: PropTypes.string,
+      failedSongs: PropTypes.arrayOf(PropTypes.string),
+      failedSongDetails: PropTypes.arrayOf(
+        PropTypes.shape({
+          name: PropTypes.string,
+          singer: PropTypes.string,
+        }),
+      ),
     }),
   ),
   totalProgress: PropTypes.number,
