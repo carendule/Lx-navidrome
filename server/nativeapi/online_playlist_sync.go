@@ -70,6 +70,7 @@ type playlistSyncStartRequest struct {
 type playlistSyncFailedSong struct {
 	Name   string `json:"name"`
 	Singer string `json:"singer"`
+	Reason string `json:"reason"`
 }
 
 type playlistSyncStatusResponse struct {
@@ -162,7 +163,38 @@ func (t *playlistSyncTask) addFailedSong(songTitle string) {
 	t.UpdatedAt = time.Now()
 }
 
-func appendFailedSongDetail(task *playlistSyncTask, song map[string]any) {
+func classifyPlaylistSyncFailureReason(err error, fallback string) string {
+	if err == nil {
+		if fallback != "" {
+			return fallback
+		}
+		return "未知错误"
+	}
+
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if strings.Contains(msg, "未找到支持") || strings.Contains(msg, "启用音源") || strings.Contains(msg, "no enabled source") || strings.Contains(msg, "no compatible quality") {
+		return "无可用解析源"
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(msg, "timeout") || strings.Contains(msg, "connection reset") || strings.Contains(msg, "broken pipe") || strings.Contains(msg, "network is unreachable") || strings.Contains(msg, "connection refused") || strings.Contains(msg, "no such host") || strings.Contains(msg, "tls") || strings.Contains(msg, "i/o timeout") || strings.Contains(msg, "unexpected eof") || strings.Contains(msg, "eof") {
+		return "下载网络中断"
+	}
+
+	if strings.Contains(msg, "import media failed") || strings.Contains(msg, "failed to import") || strings.Contains(msg, "import") {
+		return "入库失败"
+	}
+
+	if strings.Contains(msg, "add media to playlist failed") || strings.Contains(msg, "playlist") {
+		return "入歌单失败"
+	}
+
+	if fallback != "" {
+		return fallback
+	}
+	return "下载源失败"
+}
+
+func appendFailedSongDetail(task *playlistSyncTask, song map[string]any, reason string) {
 	if task == nil {
 		return
 	}
@@ -173,12 +205,15 @@ func appendFailedSongDetail(task *playlistSyncTask, song map[string]any) {
 	if strings.TrimSpace(name) == "" {
 		return
 	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "未知错误"
+	}
 	for _, item := range task.FailedSongDetails {
 		if item.Name == name && item.Singer == singer {
 			return
 		}
 	}
-	task.FailedSongDetails = append(task.FailedSongDetails, playlistSyncFailedSong{Name: name, Singer: singer})
+	task.FailedSongDetails = append(task.FailedSongDetails, playlistSyncFailedSong{Name: name, Singer: singer, Reason: reason})
 }
 
 func handlePlaylistSyncStart(w http.ResponseWriter, r *http.Request) {
@@ -555,7 +590,7 @@ func syncPlaylistSongs(task *playlistSyncTask) {
 			if err := addMediaToPlaylist(task.RequestUser, task.NavidromPlaylistID, matchedMediaID); err != nil {
 				log.Error(nil, "Failed to add existing library song to Navidrome playlist", "error", err, "songName", task.CurrentSongTitle, "playlistId", task.NavidromPlaylistID, "mediaId", matchedMediaID)
 				task.FailedSongs = append(task.FailedSongs, task.CurrentSongTitle)
-				appendFailedSongDetail(task, song)
+				appendFailedSongDetail(task, song, classifyPlaylistSyncFailureReason(err, "入歌单失败"))
 				task.Status = "syncing"
 				task.UpdatedAt = time.Now()
 				broadcastPlaylistSyncChange()
@@ -594,7 +629,7 @@ func syncPlaylistSongs(task *playlistSyncTask) {
 			}
 			log.Error(nil, "Failed to download song for playlist sync after quality fallback", err, "songName", task.CurrentSongTitle)
 			task.FailedSongs = append(task.FailedSongs, task.CurrentSongTitle)
-			appendFailedSongDetail(task, song)
+			appendFailedSongDetail(task, song, classifyPlaylistSyncFailureReason(err, "下载源失败"))
 			task.Status = "syncing"
 			task.UpdatedAt = time.Now()
 			broadcastPlaylistSyncChange()
@@ -610,7 +645,7 @@ func syncPlaylistSongs(task *playlistSyncTask) {
 		if err := addSongToNavidromPlaylist(task.RequestUser, task.NavidromPlaylistID, song, downloadedFilePath); err != nil {
 			log.Error(nil, "Failed to add song to Navidrome playlist", "error", err, "songName", task.CurrentSongTitle, "playlistId", task.NavidromPlaylistID)
 			task.FailedSongs = append(task.FailedSongs, task.CurrentSongTitle)
-			appendFailedSongDetail(task, song)
+			appendFailedSongDetail(task, song, classifyPlaylistSyncFailureReason(err, "入库失败"))
 			task.Status = "syncing"
 			task.UpdatedAt = time.Now()
 			broadcastPlaylistSyncChange()
@@ -702,13 +737,13 @@ func addSongToNavidromPlaylist(user model.User, playlistID string, song map[stri
 	mediaID, err := importAudioFileToNavidrome(user, filePath)
 	if err != nil {
 		log.Error(nil, "Failed to import audio file to Navidrome", "error", err)
-		return err
+		return fmt.Errorf("import media failed: %w", err)
 	}
 
 	// Add the media to the playlist
 	if err := addMediaToPlaylist(user, playlistID, mediaID); err != nil {
 		log.Error(nil, "Failed to add media to playlist", "error", err)
-		return err
+		return fmt.Errorf("add media to playlist failed: %w", err)
 	}
 
 	log.Debug(nil, "Successfully added song to Navidrome playlist",

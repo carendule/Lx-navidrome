@@ -286,6 +286,7 @@ const normalizeFailedSongDetails = (task) => {
       .map((item) => ({
         name: String(item?.name || '').trim(),
         singer: String(item?.singer || '').trim() || '未知歌手',
+        reason: String(item?.reason || '').trim() || '未知错误',
       }))
       .filter((item) => item.name)
   }
@@ -294,6 +295,7 @@ const normalizeFailedSongDetails = (task) => {
     .map((name) => ({
       name: String(name || '').trim(),
       singer: '未知歌手',
+      reason: '未知错误',
     }))
     .filter((item) => item.name)
 }
@@ -327,8 +329,8 @@ const DownloadList = ({
       `任务名称: ${title}`,
       `导出时间: ${new Date().toLocaleString()}`,
       '',
-      '序号\t歌曲名称\t歌手',
-      ...rows.map((row, idx) => `${idx + 1}\t${row.name}\t${row.singer || '未知歌手'}`),
+      '序号\t歌曲名称\t歌手\t失败原因',
+      ...rows.map((row, idx) => `${idx + 1}\t${row.name}\t${row.singer || '未知歌手'}\t${row.reason || '未知错误'}`),
     ]
     const txt = lines.join('\n')
     const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' })
@@ -587,7 +589,7 @@ const DownloadList = ({
                     <ListItem key={`${row.name}-${row.singer}-${index}`} divider>
                       <ListItemText
                         primary={`${index + 1}. ${row.name}`}
-                        secondary={`歌手: ${row.singer || '未知歌手'}`}
+                        secondary={`歌手: ${row.singer || '未知歌手'} · 失败原因: ${row.reason || '未知错误'}`}
                       />
                     </ListItem>
                   ))}
@@ -642,6 +644,7 @@ DownloadList.propTypes = {
         PropTypes.shape({
           name: PropTypes.string,
           singer: PropTypes.string,
+          reason: PropTypes.string,
         }),
       ),
     }),
