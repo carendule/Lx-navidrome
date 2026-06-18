@@ -253,6 +253,9 @@ const formatInFlightLabel = (task) => {
 
 const formatPlaylistSyncSubline = (task) => {
   const songTitle = String(task?.currentSongTitle || task?.artist || '未知歌曲').trim()
+  if (task?.currentSongReused) {
+    return `${songTitle} 已复用库内歌曲`
+  }
   const sourceLabel = truncateSourceName(
     String(task?.sourceName || task?.source || '未知源').trim(),
     5,

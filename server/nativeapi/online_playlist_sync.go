@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,7 @@ import (
 )
 
 type playlistSyncTask struct {
+	mu                   sync.RWMutex
 	ID                   string
 	NavidromPlaylistID   string
 	PlaylistID           string
@@ -36,6 +39,7 @@ type playlistSyncTask struct {
 	SourceName           string
 	Songs                []map[string]any
 	CompletedSongs       []string // List of song IDs that have been added to Navidrome
+	CurrentSongReused    bool     // Whether current song was matched from library
 	FailedSongs          []string
 	DownloadQueue        []map[string]any
 	DownloadTaskIDMap    map[string]int // Maps download task ID to song index
@@ -63,27 +67,29 @@ type playlistSyncStartRequest struct {
 }
 
 type playlistSyncStatusResponse struct {
-	ID               string `json:"id"`
-	Status           string `json:"status"`
-	Progress         int    `json:"progress"`
-	RemainingCount   int    `json:"remainingCount"`
-	CurrentSongTitle string `json:"currentSongTitle"`
-	SourceName       string `json:"sourceName"`
+	ID                string `json:"id"`
+	Status            string `json:"status"`
+	Progress          int    `json:"progress"`
+	RemainingCount    int    `json:"remainingCount"`
+	CurrentSongTitle  string `json:"currentSongTitle"`
+	SourceName        string `json:"sourceName"`
+	CurrentSongReused bool   `json:"currentSongReused"`
 }
 
 type playlistSyncTaskView struct {
-	ID               string `json:"id"`
-	TaskType         string `json:"taskType"`
-	Title            string `json:"title"`
-	Cover            string `json:"cover"`
-	Status           string `json:"status"`
-	Progress         int    `json:"progress"`
-	RemainingCount   int    `json:"remainingCount"`
-	CurrentSongTitle string `json:"currentSongTitle"`
-	SourceName       string `json:"sourceName"`
-	Source           string `json:"source"`
-	CreatedAt        string `json:"createdAt"`
-	UpdatedAt        string `json:"updatedAt"`
+	ID                string `json:"id"`
+	TaskType          string `json:"taskType"`
+	Title             string `json:"title"`
+	Cover             string `json:"cover"`
+	Status            string `json:"status"`
+	Progress          int    `json:"progress"`
+	RemainingCount    int    `json:"remainingCount"`
+	CurrentSongTitle  string `json:"currentSongTitle"`
+	SourceName        string `json:"sourceName"`
+	Source            string `json:"source"`
+	CurrentSongReused bool   `json:"currentSongReused"`
+	CreatedAt         string `json:"createdAt"`
+	UpdatedAt         string `json:"updatedAt"`
 }
 
 var playlistSyncTasks = struct {
@@ -95,6 +101,58 @@ var playlistImportService core.Library
 var playlistSyncDataStore model.DataStore
 
 const playlistSyncTaskTTL = 2 * time.Hour
+
+// updatePlaylistSyncTaskStatus safely updates the task status and related fields
+func (t *playlistSyncTask) updateStatus(status string, title string, progress int, remaining int, reused bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.Status = status
+	if title != "" {
+		t.CurrentSongTitle = title
+	}
+	if progress >= 0 {
+		t.Progress = progress
+	}
+	if remaining >= 0 {
+		t.RemainingCount = remaining
+	}
+	t.CurrentSongReused = reused
+	t.UpdatedAt = time.Now()
+}
+
+// updatePlaylistSyncTaskProgress safely updates progress-related fields
+func (t *playlistSyncTask) updateProgress(index int, title string, sourceName string, reused bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.CurrentSongIndex = index
+	if title != "" {
+		t.CurrentSongTitle = title
+		t.CurrentSongReused = reused
+	}
+	if sourceName != "" {
+		t.SourceName = sourceName
+	}
+	t.UpdatedAt = time.Now()
+}
+
+// addCompletedSong safely adds a completed song to the list
+func (t *playlistSyncTask) addCompletedSong(songID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.CompletedSongs = append(t.CompletedSongs, songID)
+	t.RemainingCount = len(t.Songs) - len(t.CompletedSongs)
+	t.Progress = int((len(t.CompletedSongs) * 100) / len(t.Songs))
+	t.UpdatedAt = time.Now()
+}
+
+// addFailedSong safely adds a failed song to the list and sets error status
+func (t *playlistSyncTask) addFailedSong(songTitle string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.FailedSongs = append(t.FailedSongs, songTitle)
+	t.Status = "sync-error"
+	t.UpdatedAt = time.Now()
+}
 
 func handlePlaylistSyncStart(w http.ResponseWriter, r *http.Request) {
 	var req playlistSyncStartRequest
@@ -206,14 +264,17 @@ func handlePlaylistSyncStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	task.mu.RLock()
 	response := playlistSyncStatusResponse{
-		ID:               task.ID,
-		Status:           task.Status,
-		Progress:         task.Progress,
-		RemainingCount:   task.RemainingCount,
-		CurrentSongTitle: task.CurrentSongTitle,
-		SourceName:       task.SourceName,
+		ID:                task.ID,
+		Status:            task.Status,
+		Progress:          task.Progress,
+		RemainingCount:    task.RemainingCount,
+		CurrentSongTitle:  task.CurrentSongTitle,
+		SourceName:        task.SourceName,
+		CurrentSongReused: task.CurrentSongReused,
 	}
+	task.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
@@ -234,6 +295,7 @@ func handlePlaylistSyncTasks(w http.ResponseWriter, _ *http.Request) {
 
 	views := make([]playlistSyncTaskView, 0, len(items))
 	for _, task := range items {
+		task.mu.RLock()
 		title := task.PlaylistName
 		if title == "" {
 			title = "歌单同步"
@@ -242,20 +304,23 @@ func handlePlaylistSyncTasks(w http.ResponseWriter, _ *http.Request) {
 		if source == "" {
 			source = "wy"
 		}
-		views = append(views, playlistSyncTaskView{
-			ID:               task.ID,
-			TaskType:         "playlist_sync",
-			Title:            title,
-			Cover:            task.PlaylistCover,
-			Status:           task.Status,
-			Progress:         task.Progress,
-			RemainingCount:   task.RemainingCount,
-			CurrentSongTitle: task.CurrentSongTitle,
-			SourceName:       task.SourceName,
-			Source:           source,
-			CreatedAt:        task.CreatedAt.UTC().Format(time.RFC3339),
-			UpdatedAt:        task.UpdatedAt.UTC().Format(time.RFC3339),
-		})
+		view := playlistSyncTaskView{
+			ID:                task.ID,
+			TaskType:          "playlist_sync",
+			Title:             title,
+			Cover:             task.PlaylistCover,
+			Status:            task.Status,
+			Progress:          task.Progress,
+			RemainingCount:    task.RemainingCount,
+			CurrentSongTitle:  task.CurrentSongTitle,
+			SourceName:        task.SourceName,
+			Source:            source,
+			CurrentSongReused: task.CurrentSongReused,
+			CreatedAt:         task.CreatedAt.UTC().Format(time.RFC3339),
+			UpdatedAt:         task.UpdatedAt.UTC().Format(time.RFC3339),
+		}
+		task.mu.RUnlock()
+		views = append(views, view)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -439,6 +504,7 @@ func syncPlaylistSongs(task *playlistSyncTask) {
 
 		task.CurrentSongIndex = idx
 		task.CurrentSongTitle = stringValue(song["name"])
+		task.CurrentSongReused = false
 		sourceStr := stringValue(song["source"])
 		if sourceStr == "" {
 			sourceStr = "unknown"
@@ -450,6 +516,34 @@ func syncPlaylistSongs(task *playlistSyncTask) {
 		task.UpdatedAt = time.Now()
 		log.Debug(nil, "Downloading song", "taskID", task.ID, "songIndex", idx, "songName", task.CurrentSongTitle)
 		broadcastPlaylistSyncChange()
+
+		matchedMediaID, matched, matchErr := findMatchingLibraryMediaID(task.RequestUser, song)
+		if matchErr != nil {
+			log.Warn(nil, "Playlist sync library match lookup failed", "taskID", task.ID, "songName", task.CurrentSongTitle, "error", matchErr)
+		} else if matched {
+			if err := addMediaToPlaylist(task.RequestUser, task.NavidromPlaylistID, matchedMediaID); err != nil {
+				log.Error(nil, "Failed to add existing library song to Navidrome playlist", "error", err, "songName", task.CurrentSongTitle, "playlistId", task.NavidromPlaylistID, "mediaId", matchedMediaID)
+				task.FailedSongs = append(task.FailedSongs, task.CurrentSongTitle)
+				task.Status = "sync-error"
+				task.UpdatedAt = time.Now()
+				broadcastPlaylistSyncChange()
+				break
+			}
+
+			task.CompletedSongs = append(task.CompletedSongs, songID)
+			task.CurrentSongReused = true
+			if songID != "" {
+				completed[songID] = true
+			}
+			task.RemainingCount = len(task.Songs) - len(task.CompletedSongs)
+			task.Progress = int((len(task.CompletedSongs) * 100) / len(task.Songs))
+			task.Status = "syncing"
+			task.PauseRequested = false
+			task.UpdatedAt = time.Now()
+			log.Debug(nil, "Playlist sync reused existing library song", "taskID", task.ID, "songName", task.CurrentSongTitle, "mediaId", matchedMediaID, "progress", task.Progress, "remaining", task.RemainingCount)
+			broadcastPlaylistSyncChange()
+			continue
+		}
 
 		// Attempt to download with quality fallback
 		downloadedFilePath, resolvedSourceName, err := downloadSongWithQualityFallback(
@@ -907,4 +1001,254 @@ func addMediaToPlaylist(user model.User, playlistID string, mediaID string) erro
 	)
 
 	return nil
+}
+
+func findMatchingLibraryMediaID(user model.User, song map[string]any) (string, bool, error) {
+	if playlistSyncDataStore == nil {
+		return "", false, fmt.Errorf("playlist datastore is not configured")
+	}
+
+	name, singer, durationSec := playlistSyncSongInfoFields(song)
+	if name == "" {
+		log.Debug(nil, "Playlist sync skip matching: empty song name")
+		return "", false, nil
+	}
+
+	ctx := context.Background()
+	if user.ID != "" {
+		ctx = request.WithUser(ctx, user)
+	}
+
+	query := strings.TrimSpace(strings.Join([]string{name, singer}, " "))
+	log.Debug(nil, "Playlist sync searching library for matching song", "query", query, "songName", name, "songSinger", singer, "durationSec", durationSec)
+
+	candidates, err := playlistSyncDataStore.MediaFile(ctx).Search(query, model.QueryOptions{Max: 20})
+	if err != nil {
+		log.Error(nil, "Playlist sync library search error (first attempt)", "query", query, "error", err)
+		return "", false, err
+	}
+	log.Debug(nil, "Playlist sync first search result", "query", query, "candidates", len(candidates))
+
+	if len(candidates) == 0 && singer != "" {
+		log.Debug(nil, "Playlist sync retrying search without singer", "songName", name)
+		candidates, err = playlistSyncDataStore.MediaFile(ctx).Search(name, model.QueryOptions{Max: 20})
+		if err != nil {
+			log.Error(nil, "Playlist sync library search error (second attempt)", "songName", name, "error", err)
+			return "", false, err
+		}
+		log.Debug(nil, "Playlist sync second search result", "songName", name, "candidates", len(candidates))
+	}
+
+	best := playlistSyncBestLibraryMatch(song, candidates)
+	if best == nil {
+		log.Debug(nil, "Playlist sync no best match found", "songName", name, "songSinger", singer, "candidatesCount", len(candidates))
+		return "", false, nil
+	}
+
+	log.Debug(nil, "Playlist sync matched existing library song",
+		"songName", name,
+		"songSinger", singer,
+		"durationSec", durationSec,
+		"mediaId", best.ID,
+		"mediaTitle", best.Title,
+		"mediaArtist", best.Artist,
+		"mediaDuration", best.Duration,
+	)
+	return best.ID, true, nil
+}
+
+func playlistSyncBestLibraryMatch(song map[string]any, candidates model.MediaFiles) *model.MediaFile {
+	wantName, wantSinger, wantDurationSec := playlistSyncSongInfoFields(song)
+	wantNameNorm := onlineLyricNormalizeForMatch(wantName)
+	wantSingerNorm := strings.TrimSpace(strings.ToLower(wantSinger))
+
+	var best *model.MediaFile
+	bestScore := -1
+	for i := range candidates {
+		candidate := &candidates[i]
+		titleScore := onlineLyricSimilarity(onlineLyricNormalizeForMatch(candidate.Title), wantNameNorm)
+
+		if titleScore < onlineLyricMatchTitleLooseWithArtistOrDuration {
+			log.Debug(nil, "Playlist sync candidate rejected: title score too low",
+				"candidateTitle", candidate.Title,
+				"titleScore", titleScore,
+				"threshold", onlineLyricMatchTitleLooseWithArtistOrDuration,
+			)
+			continue
+		}
+
+		artistName := candidate.Artist
+		if artistName == "" {
+			artistName = candidate.AlbumArtist
+		}
+		artistScore := 0
+		if wantSingerNorm != "" && artistName != "" {
+			artistScore = onlineLyricSimilarity(strings.ToLower(strings.TrimSpace(artistName)), wantSingerNorm)
+		}
+
+		hasDuration := wantDurationSec > 0 && candidate.Duration > 0
+		durationDelta := 0
+		if hasDuration {
+			durationDelta = int(math.Abs(float64(int(math.Round(float64(candidate.Duration))) - wantDurationSec)))
+			if durationDelta > onlineLyricMatchDurationToleranceSec {
+				log.Debug(nil, "Playlist sync candidate rejected: duration mismatch",
+					"candidateTitle", candidate.Title,
+					"wantDuration", wantDurationSec,
+					"candidateDuration", int(math.Round(float64(candidate.Duration))),
+					"delta", durationDelta,
+					"tolerance", onlineLyricMatchDurationToleranceSec,
+				)
+				continue
+			}
+		}
+
+		matched := false
+		score := titleScore
+		switch {
+		case titleScore >= onlineLyricMatchTitleMin && (wantSingerNorm == "" || artistScore >= onlineLyricMatchArtistMin) && (!hasDuration || durationDelta <= onlineLyricMatchDurationToleranceSec):
+			matched = true
+		case artistScore >= onlineLyricMatchArtistMin && titleScore >= onlineLyricMatchTitleLooseWithArtistOrDuration && (!hasDuration || durationDelta <= onlineLyricMatchDurationToleranceSec):
+			matched = true
+		case hasDuration && durationDelta <= onlineLyricMatchDurationStrongToleranceSec && titleScore >= onlineLyricMatchTitleLooseWithArtistOrDuration:
+			matched = true
+		case wantSingerNorm == "" && !hasDuration && titleScore >= onlineLyricMatchTitleOnlyMin:
+			matched = true
+		}
+		if !matched {
+			log.Debug(nil, "Playlist sync candidate rejected: matching rules",
+				"candidateTitle", candidate.Title,
+				"titleScore", titleScore,
+				"artistScore", artistScore,
+				"durationDelta", durationDelta,
+				"hasDuration", hasDuration,
+			)
+			continue
+		}
+
+		score += artistScore
+		if hasDuration {
+			score += 100 - durationDelta*10
+		}
+		log.Debug(nil, "Playlist sync candidate matched",
+			"candidateTitle", candidate.Title,
+			"candidateArtist", artistName,
+			"titleScore", titleScore,
+			"artistScore", artistScore,
+			"finalScore", score,
+			"bestScore", bestScore,
+		)
+		if score > bestScore {
+			best = candidate
+			bestScore = score
+		}
+	}
+	return best
+}
+
+func playlistSyncSongInfoFields(song map[string]any) (name, singer string, durationSec int) {
+	name = strings.TrimSpace(stringValue(song["name"]))
+	singer = strings.TrimSpace(stringValue(song["singer"]))
+	if singer == "" {
+		singer = strings.TrimSpace(stringValue(song["artist"]))
+	}
+	if singer == "" {
+		singer = playlistSyncArtistsText(song["artists"])
+	}
+	if singer == "" {
+		if meta := mapValue(song["meta"]); meta != nil {
+			singer = strings.TrimSpace(stringValue(meta["singerName"]))
+			if singer == "" {
+				singer = strings.TrimSpace(stringValue(meta["artist"]))
+			}
+		}
+	}
+	durationSec = playlistSyncDurationSeconds(song)
+	return name, singer, durationSec
+}
+
+func playlistSyncArtistsText(value any) string {
+	artists, ok := value.([]any)
+	if !ok || len(artists) == 0 {
+		return ""
+	}
+	seen := map[string]struct{}{}
+	names := make([]string, 0, len(artists))
+	for _, item := range artists {
+		var name string
+		switch typed := item.(type) {
+		case string:
+			name = strings.TrimSpace(typed)
+		case map[string]any:
+			for _, key := range []string{"name", "artist", "singer"} {
+				name = strings.TrimSpace(stringValue(typed[key]))
+				if name != "" {
+					break
+				}
+			}
+		}
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return strings.Join(names, " / ")
+}
+
+func playlistSyncDurationSeconds(song map[string]any) int {
+	if sec := onlineLyricSecondsFromInterval(stringValue(song["interval"])); sec > 0 {
+		return sec
+	}
+	for _, key := range []string{"duration", "dt"} {
+		if sec := playlistSyncNumericDurationSeconds(song[key]); sec > 0 {
+			return sec
+		}
+	}
+	if meta := mapValue(song["meta"]); meta != nil {
+		if sec := onlineLyricSecondsFromInterval(stringValue(meta["interval"])); sec > 0 {
+			return sec
+		}
+		for _, key := range []string{"duration", "dt"} {
+			if sec := playlistSyncNumericDurationSeconds(meta[key]); sec > 0 {
+				return sec
+			}
+		}
+	}
+	return 0
+}
+
+func playlistSyncNumericDurationSeconds(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return playlistSyncDurationUnitToSeconds(float64(typed))
+	case int32:
+		return playlistSyncDurationUnitToSeconds(float64(typed))
+	case int64:
+		return playlistSyncDurationUnitToSeconds(float64(typed))
+	case float32:
+		return playlistSyncDurationUnitToSeconds(float64(typed))
+	case float64:
+		return playlistSyncDurationUnitToSeconds(typed)
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		if err != nil {
+			return 0
+		}
+		return playlistSyncDurationUnitToSeconds(parsed)
+	default:
+		return 0
+	}
+}
+
+func playlistSyncDurationUnitToSeconds(value float64) int {
+	if value <= 0 {
+		return 0
+	}
+	if value >= 1000 {
+		return int(math.Round(value / 1000))
+	}
+	return int(math.Round(value))
 }
