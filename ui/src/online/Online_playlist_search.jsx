@@ -978,15 +978,66 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
         }
     }, [detailScrollContainer, handleLoadMoreDetailSongs])
 
+    const fetchAllPlaylistSongsForSync = useCallback(
+        async (playlist) => {
+            if (!playlist) return []
+            const currentSource = playlist.source || source
+            const currentPlaylistId = String(playlist.id || '').trim()
+            if (!currentPlaylistId) return []
+
+            const pageSize = 30
+            const maxPages = 200
+            const allSongs = []
+
+            const fetchPage = async (pageNum) => {
+                const { json } = await httpClient(
+                    `/api/online/playlist/detail?source=${encodeURIComponent(currentSource)}&id=${encodeURIComponent(currentPlaylistId)}&limit=${encodeURIComponent(pageSize)}&page=${encodeURIComponent(pageNum)}`,
+                )
+                const list = Array.isArray(json?.list) ? json.list : []
+                const normalized = list.map((song) =>
+                    normalizeDetailSongItem(song, currentSource),
+                )
+                return {
+                    songs: normalized,
+                    total: Number(json?.total) || Number(playlist.songCount) || 0,
+                }
+            }
+
+            const first = await fetchPage(1)
+            allSongs.push(...first.songs)
+
+            const targetTotal = first.total > 0 ? first.total : allSongs.length
+            const totalPages = Math.max(1, Math.ceil(targetTotal / pageSize))
+            const boundedPages = Math.min(totalPages, maxPages)
+
+            for (let page = 2; page <= boundedPages; page += 1) {
+                const next = await fetchPage(page)
+                if (!next.songs.length) break
+                allSongs.push(...next.songs)
+                if (allSongs.length >= targetTotal && targetTotal > 0) break
+            }
+
+            return allSongs
+        },
+        [source],
+    )
+
     const handleStartPlaylistSync = useCallback(async () => {
         if (!detailPlaylist || syncButtonLoading) return
 
         setSyncButtonLoading(true)
         try {
+            const allSongs = await fetchAllPlaylistSongsForSync(detailPlaylist)
+            if (!allSongs.length) {
+                setDetailError('未获取到歌单歌曲，无法同步')
+                setSyncButtonLoading(false)
+                return
+            }
+
             // Analyze all available qualities from songs.
             // Reuse getQualityKeys to stay consistent with song list rendering.
             const qualitiesSet = new Set()
-            detailSongs.forEach((song) => {
+            allSongs.forEach((song) => {
                 getQualityKeys(song).forEach((q) => {
                     if (q) qualitiesSet.add(String(q))
                 })
@@ -1023,6 +1074,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                 playlistCover,
                 currentSource,
                 currentPlaylistId,
+                allSongs,
             })
 
             // Open quality selection dialog
@@ -1033,7 +1085,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
             setDetailError('无法解析歌单音质，请稍后重试')
             setSyncButtonLoading(false)
         }
-    }, [detailPlaylist, detailInfo, source, detailSongs, syncButtonLoading])
+    }, [detailPlaylist, detailInfo, source, syncButtonLoading, fetchAllPlaylistSongsForSync])
 
     const handleConfirmSyncQuality = useCallback(async () => {
         if (!pendingSyncData || !selectedSyncQuality) return
@@ -1045,7 +1097,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
             console.log('[playlist-sync] confirm sync quality', {
                 pendingSyncData,
                 selectedSyncQuality,
-                detailSongsCount: detailSongs.length,
+                detailSongsCount: pendingSyncData?.allSongs?.length || 0,
                 detailTotal,
                 selectedQualityMeta: QUALITY_META[selectedSyncQuality] || null,
             })
@@ -1072,9 +1124,9 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
             if (onCreatePlaylistSyncTask) {
                 console.log('[playlist-sync] emit create task', {
                     syncTask,
-                    detailSongsCount: detailSongs.length,
+                    detailSongsCount: pendingSyncData?.allSongs?.length || 0,
                 })
-                onCreatePlaylistSyncTask(syncTask, detailSongs)
+                onCreatePlaylistSyncTask(syncTask, pendingSyncData.allSongs || [])
                 console.log('[playlist-sync] create task callback returned', {
                     taskId: syncTask.id,
                 })
@@ -1096,7 +1148,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
             })
             setSyncButtonLoading(false)
         }
-    }, [pendingSyncData, selectedSyncQuality, detailTotal, detailSongs, onCreatePlaylistSyncTask])
+    }, [pendingSyncData, selectedSyncQuality, detailTotal, onCreatePlaylistSyncTask])
 
     const handleCloseSyncQualityDialog = useCallback(() => {
         setSyncQualityDialogOpen(false)
