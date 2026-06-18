@@ -258,8 +258,8 @@ func handlePlaylistSyncRetryAll(w http.ResponseWriter, _ *http.Request) {
 
 	playlistSyncTasks.Lock()
 	for _, task := range playlistSyncTasks.items {
-		// Retry both failed and paused sync tasks.
-		if task.Status != "sync-error" && task.Status != "paused" {
+		// Retry failed, paused, and canceled sync tasks.
+		if task.Status != "sync-error" && task.Status != "paused" && task.Status != "canceled" {
 			continue
 		}
 		if len(task.Songs) == 0 || len(task.CompletedSongs) >= len(task.Songs) {
@@ -307,8 +307,8 @@ func handlePlaylistSyncCancelAll(w http.ResponseWriter, _ *http.Request) {
 		switch task.Status {
 		case "syncing", "resolving", "downloading", "queued":
 			task.PauseRequested = true
-			task.Status = "paused"
-			task.CurrentSongTitle = "已暂停"
+			task.Status = "canceled"
+			task.CurrentSongTitle = "已取消"
 			task.UpdatedAt = now
 			if task.CurrentCancel != nil {
 				task.CurrentCancel()
@@ -352,7 +352,7 @@ func handlePlaylistSyncClearFailed(w http.ResponseWriter, _ *http.Request) {
 
 	playlistSyncTasks.Lock()
 	for id, task := range playlistSyncTasks.items {
-		if task.Status == "sync-error" || task.Status == "paused" {
+		if task.Status == "sync-error" || task.Status == "paused" || task.Status == "canceled" {
 			delete(playlistSyncTasks.items, id)
 			removed = true
 		}
@@ -446,8 +446,8 @@ func syncPlaylistSongs(task *playlistSyncTask) {
 		)
 		if err != nil {
 			if task.Status == "paused" || task.PauseRequested || errors.Is(err, context.Canceled) {
-				task.Status = "paused"
-				task.CurrentSongTitle = "已暂停"
+				task.Status = "canceled"
+				task.CurrentSongTitle = "已取消"
 				task.UpdatedAt = time.Now()
 				broadcastPlaylistSyncChange()
 				break

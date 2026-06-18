@@ -155,15 +155,20 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
         .then(([downloadRes, syncRes]) => {
           if (activeRef && !activeRef.current) return
           const json = downloadRes?.json || {}
-          setDownloadTaskState({
-            tasks: Array.isArray(json?.tasks) ? json.tasks : [],
-            activeCount: Number(json?.activeCount) || 0,
-            totalSpeedText: String(json?.totalSpeedText || '0 B/s'),
-            totalProgress: Number(json?.totalProgress) || 0,
-          })
           const syncTasks = Array.isArray(syncRes?.json?.tasks)
             ? syncRes.json.tasks
             : []
+          const activeSyncCount = syncTasks.filter((task) => (
+            task?.status === 'syncing'
+            || task?.status === 'resolving'
+            || task?.status === 'downloading'
+          )).length
+          setDownloadTaskState({
+            tasks: Array.isArray(json?.tasks) ? json.tasks : [],
+            activeCount: (Number(json?.activeCount) || 0) + activeSyncCount,
+            totalSpeedText: String(json?.totalSpeedText || '0 B/s'),
+            totalProgress: Number(json?.totalProgress) || 0,
+          })
           if (syncTasks.length > 0) {
             console.log('[AppBar] refreshDownloadTasks - sync tasks:', syncTasks.map(t => ({
               id: t.id,

@@ -218,6 +218,13 @@ const taskStatusColorMap = {
   'sync-error': '#ff9800',
 }
 
+const getDisplayStatus = (task) => {
+  if (task?.taskType === 'playlist_sync' && task?.status === 'paused') {
+    return 'canceled'
+  }
+  return task?.status
+}
+
 // While a server download is in flight we show the *resolver script*
 // name (e.g. "ikun[赞助]…") instead of the static source code ("wy"),
 // because the user can see which candidate is currently being tried or
@@ -455,10 +462,10 @@ const DownloadList = ({
                       <Box className={classes.rightMeta}>
                         <Chip
                           size="small"
-                          label={statusLabel[task.status] || '未知'}
+                          label={statusLabel[getDisplayStatus(task)] || '未知'}
                           style={{
                             backgroundColor:
-                              taskStatusColorMap[task.status] || '#999',
+                              taskStatusColorMap[getDisplayStatus(task)] || '#999',
                             color: 'white',
                           }}
                         />
