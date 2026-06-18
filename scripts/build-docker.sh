@@ -18,6 +18,8 @@
 #   GIT_TAG        Override the embedded git tag
 #   SKIP_UI_CHECK  Set to "1" to skip the ui/build/ sanity check
 #   NO_CACHE       Set to "1" to disable Docker build cache
+#   CUSTOM_CA_CERT_FILE  Optional path to a PEM/CRT root CA file to trust
+#                        inside Docker build stages (for corporate MITM/proxy)
 #
 # The script does NOT need sudo if your user is in the
 # `docker` group. If you get "permission denied" on the
@@ -90,6 +92,8 @@ PLATFORM="${PLATFORM:-}"
 SKIP_UI_CHECK="${SKIP_UI_CHECK:-}"
 NO_CACHE="${NO_CACHE:-}"
 PUSH="${PUSH:-}"
+CUSTOM_CA_CERT_FILE="${CUSTOM_CA_CERT_FILE:-}"
+CUSTOM_CA_CERT_B64=""
 
 # --- pre-flight checks ------------------------------------------------------
 echo "==> Lx-Navidrome Docker build"
@@ -202,6 +206,15 @@ if ! docker buildx version >/dev/null 2>&1; then
 fi
 echo "    buildx       : $(docker buildx version 2>&1 | head -1)"
 
+if [[ -n "${CUSTOM_CA_CERT_FILE}" ]]; then
+  if [[ ! -f "${CUSTOM_CA_CERT_FILE}" ]]; then
+    echo "ERROR: CUSTOM_CA_CERT_FILE does not exist: ${CUSTOM_CA_CERT_FILE}" >&2
+    exit 1
+  fi
+  CUSTOM_CA_CERT_B64="$(base64 -w 0 "${CUSTOM_CA_CERT_FILE}")"
+  echo "    custom CA    : ${CUSTOM_CA_CERT_FILE}"
+fi
+
 # 4. Detect host architecture for the buildx target. The
 #    default buildx builder uses the host arch, so we
 #    just need to communicate the right TARGETARCH
@@ -252,6 +265,7 @@ BUILD_ARGS=(
   --build-arg "GIT_SHA=${GIT_SHA}"
   --build-arg "GIT_TAG=${GIT_TAG}"
   --build-arg "TARGETARCH=${TARGETARCH}"
+  --build-arg "CUSTOM_CA_CERT_B64=${CUSTOM_CA_CERT_B64}"
   --tag "${DOCKER_TAG}"
   --file "Dockerfile.lx"
   --platform "${PLATFORM}"
