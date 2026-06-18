@@ -249,17 +249,17 @@ type onlineSearchNodeResult struct {
 	Success bool             `json:"success"`
 	List    []map[string]any `json:"list"`
 	Total   int              `json:"total"`
-  Limit   int              `json:"limit,omitempty"`
-  Info    map[string]any   `json:"info,omitempty"`
+	Limit   int              `json:"limit,omitempty"`
+	Info    map[string]any   `json:"info,omitempty"`
 	Error   string           `json:"error,omitempty"`
 }
 
 type onlinePlaylistTagsNodeResult struct {
-  Success  bool                    `json:"success"`
-  Tags     []playlistTagGroup      `json:"tags"`
-  HotTag   []onlinePlaylistTag     `json:"hotTag,omitempty"`
-  SortList []map[string]string     `json:"sortList,omitempty"`
-  Error    string                  `json:"error,omitempty"`
+	Success  bool                `json:"success"`
+	Tags     []playlistTagGroup  `json:"tags"`
+	HotTag   []onlinePlaylistTag `json:"hotTag,omitempty"`
+	SortList []map[string]string `json:"sortList,omitempty"`
+	Error    string              `json:"error,omitempty"`
 }
 
 type onlinePlaylistPlazaNodeResult struct {
@@ -2013,18 +2013,11 @@ func (api *Router) addOnlineSearchRoutes(r chi.Router) {
 	r.Get("/online/playlist/list", api.onlinePlaylistList)
 	r.Get("/online/playlist/search", api.onlinePlaylistSearch)
 	r.Get("/online/playlist/detail", api.onlinePlaylistDetail)
-	r.Post("/online/playlist/sync/start", handlePlaylistSyncStart)
-	r.Get("/online/playlist/sync/status/{taskID}", handlePlaylistSyncStatus)
-  r.Get("/online/playlist/sync/tasks", handlePlaylistSyncTasks)
-  r.Post("/online/playlist/sync/tasks/retry", handlePlaylistSyncRetryAll)
-  r.Post("/online/playlist/sync/tasks/cancel", handlePlaylistSyncCancelAll)
-  r.Post("/online/playlist/sync/tasks/clear-completed", handlePlaylistSyncClearCompleted)
-  r.Post("/online/playlist/sync/tasks/clear-failed", handlePlaylistSyncClearFailed)
 }
 
 type onlinePlaylistTag struct {
-  ID   string `json:"id"`
-  Name string `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type playlistTagGroup struct {
@@ -2044,25 +2037,25 @@ func (api *Router) onlinePlaylistTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-  ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-  defer cancel()
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
 
-  meta, err := fetchOnlinePlaylistMeta(ctx, source)
-  if err != nil {
-    log.Warn(r.Context(), "Online playlist tags failed", "source", source, "err", err)
-    writeJSON(w, map[string]any{
-      "source":   source,
-      "tags":     []playlistTagGroup{},
-      "sortList": []map[string]string{},
-      "error":    err.Error(),
-    })
-    return
-  }
+	meta, err := fetchOnlinePlaylistMeta(ctx, source)
+	if err != nil {
+		log.Warn(r.Context(), "Online playlist tags failed", "source", source, "err", err)
+		writeJSON(w, map[string]any{
+			"source":   source,
+			"tags":     []playlistTagGroup{},
+			"sortList": []map[string]string{},
+			"error":    err.Error(),
+		})
+		return
+	}
 
 	writeJSON(w, map[string]any{
 		"source":   source,
-    "tags":     meta.Tags,
-    "sortList": meta.SortList,
+		"tags":     meta.Tags,
+		"sortList": meta.SortList,
 	})
 }
 
@@ -2078,8 +2071,8 @@ func (api *Router) onlinePlaylistList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-  sortID := strings.TrimSpace(r.URL.Query().Get("sortId"))
-  tagID := strings.TrimSpace(r.URL.Query().Get("tagId"))
+	sortID := strings.TrimSpace(r.URL.Query().Get("sortId"))
+	tagID := strings.TrimSpace(r.URL.Query().Get("tagId"))
 
 	page := 1
 	if raw := strings.TrimSpace(r.URL.Query().Get("page")); raw != "" {
@@ -2091,13 +2084,13 @@ func (api *Router) onlinePlaylistList(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
-  result, err := fetchOnlinePlaylistPlazaList(ctx, source, sortID, tagID, page, 30)
+	result, err := fetchOnlinePlaylistPlazaList(ctx, source, sortID, tagID, page, 30)
 	if err != nil {
-    log.Warn(r.Context(), "Online playlist list failed", "source", source, "tagId", tagID, "sortId", sortID, "err", err)
+		log.Warn(r.Context(), "Online playlist list failed", "source", source, "tagId", tagID, "sortId", sortID, "err", err)
 		writeJSON(w, map[string]any{
-      "source": source,
-      "tagId":  tagID,
-      "sortId": sortID,
+			"source": source,
+			"tagId":  tagID,
+			"sortId": sortID,
 			"page":   page,
 			"total":  0,
 			"list":   []map[string]any{},
@@ -2108,64 +2101,64 @@ func (api *Router) onlinePlaylistList(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, map[string]any{
 		"source": source,
-    "tagId":  tagID,
+		"tagId":  tagID,
 		"sortId": sortID,
 		"page":   page,
-    "total":  result.Total,
-    "list":   result.List,
-    "limit":  result.Limit,
+		"total":  result.Total,
+		"list":   result.List,
+		"limit":  result.Limit,
 	})
 }
 
 func (api *Router) onlinePlaylistSearch(w http.ResponseWriter, r *http.Request) {
-  source := r.URL.Query().Get("source")
-  if source == "" {
-    source = "wy"
-  }
+	source := r.URL.Query().Get("source")
+	if source == "" {
+		source = "wy"
+	}
 
-  validSources := map[string]bool{"wy": true, "tx": true, "kg": true, "kw": true, "mg": true}
-  if !validSources[source] {
-    http.Error(w, "invalid source", http.StatusBadRequest)
-    return
-  }
+	validSources := map[string]bool{"wy": true, "tx": true, "kg": true, "kw": true, "mg": true}
+	if !validSources[source] {
+		http.Error(w, "invalid source", http.StatusBadRequest)
+		return
+	}
 
-  keyword := strings.TrimSpace(r.URL.Query().Get("keyword"))
-  if keyword == "" {
-    http.Error(w, "keyword is required", http.StatusBadRequest)
-    return
-  }
+	keyword := strings.TrimSpace(r.URL.Query().Get("keyword"))
+	if keyword == "" {
+		http.Error(w, "keyword is required", http.StatusBadRequest)
+		return
+	}
 
-  page := 1
-  if raw := strings.TrimSpace(r.URL.Query().Get("page")); raw != "" {
-    if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-      page = n
-    }
-  }
+	page := 1
+	if raw := strings.TrimSpace(r.URL.Query().Get("page")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			page = n
+		}
+	}
 
-  ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-  defer cancel()
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
 
-  list, total, err := fetchOnlineSearchList(ctx, source, "playlist", keyword, page, 30, "")
-  if err != nil {
-    log.Warn(r.Context(), "Online playlist search failed", "source", source, "keyword", keyword, "err", err)
-    writeJSON(w, map[string]any{
-      "source":  source,
-      "keyword": keyword,
-      "page":    page,
-      "total":   0,
-      "list":    []map[string]any{},
-      "error":   err.Error(),
-    })
-    return
-  }
+	list, total, err := fetchOnlineSearchList(ctx, source, "playlist", keyword, page, 30, "")
+	if err != nil {
+		log.Warn(r.Context(), "Online playlist search failed", "source", source, "keyword", keyword, "err", err)
+		writeJSON(w, map[string]any{
+			"source":  source,
+			"keyword": keyword,
+			"page":    page,
+			"total":   0,
+			"list":    []map[string]any{},
+			"error":   err.Error(),
+		})
+		return
+	}
 
-  writeJSON(w, map[string]any{
-    "source":  source,
-    "keyword": keyword,
-    "page":    page,
-    "total":   total,
-    "list":    list,
-  })
+	writeJSON(w, map[string]any{
+		"source":  source,
+		"keyword": keyword,
+		"page":    page,
+		"total":   total,
+		"list":    list,
+	})
 }
 
 func (api *Router) onlinePlaylistDetail(w http.ResponseWriter, r *http.Request) {
@@ -2180,35 +2173,35 @@ func (api *Router) onlinePlaylistDetail(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-  playlistID := strings.TrimSpace(r.URL.Query().Get("id"))
-  if playlistID == "" {
-    http.Error(w, "id is required", http.StatusBadRequest)
+	playlistID := strings.TrimSpace(r.URL.Query().Get("id"))
+	if playlistID == "" {
+		http.Error(w, "id is required", http.StatusBadRequest)
 		return
 	}
 
-  page := 1
-  if p := r.URL.Query().Get("page"); p != "" {
-    if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
-      page = parsed
-    }
-  }
+	page := 1
+	if p := r.URL.Query().Get("page"); p != "" {
+		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
+			page = parsed
+		}
+	}
 
-  limit := 30
-  if l := r.URL.Query().Get("limit"); l != "" {
-    if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 100 {
-      limit = parsed
-    }
-  }
+	limit := 30
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 100 {
+			limit = parsed
+		}
+	}
 
-  ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-  defer cancel()
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
 
-  detail, err := fetchOnlinePlaylistDetail(ctx, source, playlistID, page, limit)
+	detail, err := fetchOnlinePlaylistDetail(ctx, source, playlistID, page, limit)
 	if err != nil {
-    log.Warn(r.Context(), "Online playlist detail failed", "source", source, "id", playlistID, "err", err)
+		log.Warn(r.Context(), "Online playlist detail failed", "source", source, "id", playlistID, "err", err)
 		writeJSON(w, map[string]any{
 			"source": source,
-      "id":     playlistID,
+			"id":     playlistID,
 			"list":   []map[string]any{},
 			"error":  err.Error(),
 		})
@@ -2217,10 +2210,10 @@ func (api *Router) onlinePlaylistDetail(w http.ResponseWriter, r *http.Request) 
 
 	writeJSON(w, map[string]any{
 		"source": source,
-    "id":     playlistID,
-    "total":  detail.Total,
-    "list":   detail.List,
-    "info":   detail.Info,
+		"id":     playlistID,
+		"total":  detail.Total,
+		"list":   detail.List,
+		"info":   detail.Info,
 	})
 }
 
@@ -2268,7 +2261,7 @@ func (api *Router) onlineSearch(w http.ResponseWriter, r *http.Request) {
 	if searchType == "" {
 		searchType = "song"
 	}
-  if searchType != "song" && searchType != "singer" && searchType != "album" && searchType != "playlist" {
+	if searchType != "song" && searchType != "singer" && searchType != "album" && searchType != "playlist" {
 		http.Error(w, "invalid type", http.StatusBadRequest)
 		return
 	}
@@ -2296,7 +2289,7 @@ func (api *Router) onlineSearch(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
-  list, total, err := fetchOnlineSearchList(ctx, source, searchType, name, page, limit, "")
+	list, total, err := fetchOnlineSearchList(ctx, source, searchType, name, page, limit, "")
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(strings.ToLower(errMsg), "econnreset") {
@@ -2394,7 +2387,7 @@ func fetchOnlineSearchList(ctx context.Context, source, searchType, keyword stri
 		fmt.Sprintf("ND_TYPE=%s", searchType),
 		fmt.Sprintf("ND_PAGE=%d", page),
 		fmt.Sprintf("ND_LIMIT=%d", limit),
-    fmt.Sprintf("ND_SORT_ID=%s", sortID),
+		fmt.Sprintf("ND_SORT_ID=%s", sortID),
 		fmt.Sprintf("ND_KEYWORD_B64=%s", encodedKeyword),
 		"ND_TIMEOUT_MS=8000",
 	)
@@ -2435,133 +2428,133 @@ func fetchOnlineSearchList(ctx context.Context, source, searchType, keyword stri
 }
 
 func fetchOnlinePlaylistDetail(ctx context.Context, source, playlistID string, page, limit int) (onlineSearchNodeResult, error) {
-  if _, err := exec.LookPath("node"); err != nil {
-    return onlineSearchNodeResult{}, fmt.Errorf("node not available")
-  }
+	if _, err := exec.LookPath("node"); err != nil {
+		return onlineSearchNodeResult{}, fmt.Errorf("node not available")
+	}
 
-  cmd := exec.CommandContext(ctx, "node", "-e", nodePlaylistDetailScript)
-  cmd.Env = append(os.Environ(),
-    fmt.Sprintf("ND_SOURCE=%s", source),
-    fmt.Sprintf("ND_PLAYLIST_ID=%s", playlistID),
-    fmt.Sprintf("ND_PAGE=%d", page),
-    fmt.Sprintf("ND_LIMIT=%d", limit),
-    "ND_TIMEOUT_MS=10000",
-  )
+	cmd := exec.CommandContext(ctx, "node", "-e", nodePlaylistDetailScript)
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("ND_SOURCE=%s", source),
+		fmt.Sprintf("ND_PLAYLIST_ID=%s", playlistID),
+		fmt.Sprintf("ND_PAGE=%d", page),
+		fmt.Sprintf("ND_LIMIT=%d", limit),
+		"ND_TIMEOUT_MS=10000",
+	)
 
-  var stdout, stderr bytes.Buffer
-  cmd.Stdout = &stdout
-  cmd.Stderr = &stderr
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 
-  if err := cmd.Run(); err != nil {
-    if stderr.Len() > 0 {
-      return onlineSearchNodeResult{}, fmt.Errorf("node error: %s", bytes.TrimSpace(stderr.Bytes()))
-    }
-    return onlineSearchNodeResult{}, err
-  }
+	if err := cmd.Run(); err != nil {
+		if stderr.Len() > 0 {
+			return onlineSearchNodeResult{}, fmt.Errorf("node error: %s", bytes.TrimSpace(stderr.Bytes()))
+		}
+		return onlineSearchNodeResult{}, err
+	}
 
-  var result onlineSearchNodeResult
-  if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-    return onlineSearchNodeResult{}, fmt.Errorf("invalid node response: %w", err)
-  }
+	var result onlineSearchNodeResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		return onlineSearchNodeResult{}, fmt.Errorf("invalid node response: %w", err)
+	}
 
-  if !result.Success {
-    return onlineSearchNodeResult{}, fmt.Errorf("%s", result.Error)
-  }
+	if !result.Success {
+		return onlineSearchNodeResult{}, fmt.Errorf("%s", result.Error)
+	}
 
-  if result.List == nil {
-    result.List = []map[string]any{}
-  }
-  if result.Total < 0 {
-    result.Total = 0
-  }
-  if result.Total == 0 {
-    result.Total = len(result.List)
-  }
+	if result.List == nil {
+		result.List = []map[string]any{}
+	}
+	if result.Total < 0 {
+		result.Total = 0
+	}
+	if result.Total == 0 {
+		result.Total = len(result.List)
+	}
 
-  return result, nil
+	return result, nil
 }
 
 func fetchOnlinePlaylistMeta(ctx context.Context, source string) (onlinePlaylistTagsNodeResult, error) {
-  if _, err := exec.LookPath("node"); err != nil {
-    return onlinePlaylistTagsNodeResult{}, fmt.Errorf("node not available")
-  }
+	if _, err := exec.LookPath("node"); err != nil {
+		return onlinePlaylistTagsNodeResult{}, fmt.Errorf("node not available")
+	}
 
-  cmd := exec.CommandContext(ctx, "node", "-e", nodePlaylistBrowseScript)
-  cmd.Env = append(os.Environ(),
-    fmt.Sprintf("ND_SOURCE=%s", source),
-    "ND_BROWSE_MODE=tags",
-    "ND_TIMEOUT_MS=10000",
-  )
+	cmd := exec.CommandContext(ctx, "node", "-e", nodePlaylistBrowseScript)
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("ND_SOURCE=%s", source),
+		"ND_BROWSE_MODE=tags",
+		"ND_TIMEOUT_MS=10000",
+	)
 
-  var stdout, stderr bytes.Buffer
-  cmd.Stdout = &stdout
-  cmd.Stderr = &stderr
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 
-  if err := cmd.Run(); err != nil {
-    if stderr.Len() > 0 {
-      return onlinePlaylistTagsNodeResult{}, fmt.Errorf("node error: %s", bytes.TrimSpace(stderr.Bytes()))
-    }
-    return onlinePlaylistTagsNodeResult{}, err
-  }
+	if err := cmd.Run(); err != nil {
+		if stderr.Len() > 0 {
+			return onlinePlaylistTagsNodeResult{}, fmt.Errorf("node error: %s", bytes.TrimSpace(stderr.Bytes()))
+		}
+		return onlinePlaylistTagsNodeResult{}, err
+	}
 
-  var result onlinePlaylistTagsNodeResult
-  if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-    return onlinePlaylistTagsNodeResult{}, fmt.Errorf("invalid node response: %w", err)
-  }
-  if !result.Success {
-    return onlinePlaylistTagsNodeResult{}, fmt.Errorf("%s", result.Error)
-  }
-  if result.Tags == nil {
-    result.Tags = []playlistTagGroup{}
-  }
-  if result.SortList == nil {
-    result.SortList = []map[string]string{}
-  }
-  return result, nil
+	var result onlinePlaylistTagsNodeResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		return onlinePlaylistTagsNodeResult{}, fmt.Errorf("invalid node response: %w", err)
+	}
+	if !result.Success {
+		return onlinePlaylistTagsNodeResult{}, fmt.Errorf("%s", result.Error)
+	}
+	if result.Tags == nil {
+		result.Tags = []playlistTagGroup{}
+	}
+	if result.SortList == nil {
+		result.SortList = []map[string]string{}
+	}
+	return result, nil
 }
 
 func fetchOnlinePlaylistPlazaList(ctx context.Context, source, sortID, tagID string, page, limit int) (onlinePlaylistPlazaNodeResult, error) {
-  if _, err := exec.LookPath("node"); err != nil {
-    return onlinePlaylistPlazaNodeResult{}, fmt.Errorf("node not available")
-  }
+	if _, err := exec.LookPath("node"); err != nil {
+		return onlinePlaylistPlazaNodeResult{}, fmt.Errorf("node not available")
+	}
 
-  cmd := exec.CommandContext(ctx, "node", "-e", nodePlaylistBrowseScript)
-  cmd.Env = append(os.Environ(),
-    fmt.Sprintf("ND_SOURCE=%s", source),
-    "ND_BROWSE_MODE=list",
-    fmt.Sprintf("ND_SORT_ID=%s", sortID),
-    fmt.Sprintf("ND_TAG_ID=%s", tagID),
-    fmt.Sprintf("ND_PAGE=%d", page),
-    fmt.Sprintf("ND_LIMIT=%d", limit),
-    "ND_TIMEOUT_MS=12000",
-  )
+	cmd := exec.CommandContext(ctx, "node", "-e", nodePlaylistBrowseScript)
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("ND_SOURCE=%s", source),
+		"ND_BROWSE_MODE=list",
+		fmt.Sprintf("ND_SORT_ID=%s", sortID),
+		fmt.Sprintf("ND_TAG_ID=%s", tagID),
+		fmt.Sprintf("ND_PAGE=%d", page),
+		fmt.Sprintf("ND_LIMIT=%d", limit),
+		"ND_TIMEOUT_MS=12000",
+	)
 
-  var stdout, stderr bytes.Buffer
-  cmd.Stdout = &stdout
-  cmd.Stderr = &stderr
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 
-  if err := cmd.Run(); err != nil {
-    if stderr.Len() > 0 {
-      return onlinePlaylistPlazaNodeResult{}, fmt.Errorf("node error: %s", bytes.TrimSpace(stderr.Bytes()))
-    }
-    return onlinePlaylistPlazaNodeResult{}, err
-  }
+	if err := cmd.Run(); err != nil {
+		if stderr.Len() > 0 {
+			return onlinePlaylistPlazaNodeResult{}, fmt.Errorf("node error: %s", bytes.TrimSpace(stderr.Bytes()))
+		}
+		return onlinePlaylistPlazaNodeResult{}, err
+	}
 
-  var nodeResult onlinePlaylistPlazaNodeResult
-  if err := json.Unmarshal(stdout.Bytes(), &nodeResult); err != nil {
-    return onlinePlaylistPlazaNodeResult{}, fmt.Errorf("invalid node response: %w", err)
-  }
-  if !nodeResult.Success {
-    return onlinePlaylistPlazaNodeResult{}, fmt.Errorf("%s", nodeResult.Error)
-  }
-  if nodeResult.List == nil {
-    nodeResult.List = []map[string]any{}
-  }
-  if nodeResult.Total < 0 {
-    nodeResult.Total = 0
-  }
-  if nodeResult.Limit <= 0 {
-    nodeResult.Limit = limit
-  }
-  return nodeResult, nil
+	var nodeResult onlinePlaylistPlazaNodeResult
+	if err := json.Unmarshal(stdout.Bytes(), &nodeResult); err != nil {
+		return onlinePlaylistPlazaNodeResult{}, fmt.Errorf("invalid node response: %w", err)
+	}
+	if !nodeResult.Success {
+		return onlinePlaylistPlazaNodeResult{}, fmt.Errorf("%s", nodeResult.Error)
+	}
+	if nodeResult.List == nil {
+		nodeResult.List = []map[string]any{}
+	}
+	if nodeResult.Total < 0 {
+		nodeResult.Total = 0
+	}
+	if nodeResult.Limit <= 0 {
+		nodeResult.Limit = limit
+	}
+	return nodeResult, nil
 }

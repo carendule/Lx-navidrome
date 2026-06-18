@@ -1,14 +1,20 @@
 package nativeapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/deluan/rest"
 	"github.com/go-chi/chi/v5"
@@ -16,7 +22,12 @@ import (
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
 	"github.com/navidrome/navidrome/utils/req"
+	_ "golang.org/x/image/webp"
 )
+
+type fetchPlaylistImageRequest struct {
+	ImageURL string `json:"imageUrl"`
+}
 
 type restHandler = func(rest.RepositoryConstructor, ...rest.Logger) http.HandlerFunc
 
@@ -231,6 +242,101 @@ func uploadPlaylistImage(pls playlists.Playlists) http.HandlerFunc {
 		playlistId := chi.URLParamFromCtx(ctx, "id")
 		return pls.SetImage(ctx, playlistId, reader, ext)
 	})
+}
+
+func fetchPlaylistImage(pls playlists.Playlists) http.HandlerFunc {
+	maxImageSize := maxImageUploadSize()
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		if !checkImageUploadPermission(w, r) {
+			return
+		}
+
+		playlistId := chi.URLParam(r, "id")
+		if playlistId == "" {
+			http.Error(w, "missing playlist id", http.StatusBadRequest)
+			return
+		}
+
+		var reqBody fetchPlaylistImageRequest
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		imageURL := strings.TrimSpace(reqBody.ImageURL)
+		if imageURL == "" {
+			http.Error(w, "imageUrl is required", http.StatusBadRequest)
+			return
+		}
+
+		fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
+		fetchReq, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, imageURL, nil)
+		if err != nil {
+			http.Error(w, "invalid imageUrl", http.StatusBadRequest)
+			return
+		}
+		fetchReq.Header.Set("User-Agent", "Navidrome/online-playlist-sync")
+
+		resp, err := http.DefaultClient.Do(fetchReq)
+		if err != nil {
+			log.Error(ctx, "Error fetching remote playlist image", "playlistId", playlistId, "imageUrl", imageURL, err)
+			http.Error(w, "failed to fetch remote image", http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			http.Error(w, "failed to fetch remote image", http.StatusBadGateway)
+			return
+		}
+
+		limited := io.LimitReader(resp.Body, maxImageSize+1)
+		payload, err := io.ReadAll(limited)
+		if err != nil {
+			log.Error(ctx, "Error reading remote playlist image", "playlistId", playlistId, "imageUrl", imageURL, err)
+			http.Error(w, "failed to read remote image", http.StatusBadGateway)
+			return
+		}
+		if int64(len(payload)) > maxImageSize {
+			http.Error(w, "remote image too large", http.StatusBadRequest)
+			return
+		}
+
+		_, format, err := image.DecodeConfig(bytes.NewReader(payload))
+		if err != nil {
+			log.Error(ctx, "Remote playlist image is not a valid image", "playlistId", playlistId, "imageUrl", imageURL, err)
+			http.Error(w, "remote file is not a valid image", http.StatusBadRequest)
+			return
+		}
+
+		ext := "." + format
+		if ext == "." || ext == "" {
+			ext = strings.ToLower(filepath.Ext(imageURL))
+		}
+		if ext == "" || ext == "." {
+			http.Error(w, "could not determine image type", http.StatusBadRequest)
+			return
+		}
+
+		if err := pls.SetImage(ctx, playlistId, bytes.NewReader(payload), ext); err != nil {
+			if errors.Is(err, model.ErrNotAuthorized) {
+				http.Error(w, "not authorized", http.StatusForbidden)
+				return
+			}
+			if errors.Is(err, model.ErrNotFound) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			log.Error(ctx, "Error saving fetched playlist image", "playlistId", playlistId, err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		_, _ = fmt.Fprintf(w, `{"status":"ok"}`)
+	}
 }
 
 func deletePlaylistImage(pls playlists.Playlists) http.HandlerFunc {

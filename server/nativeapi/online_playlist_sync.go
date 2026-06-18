@@ -15,47 +15,51 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/navidrome/navidrome/core"
 	"github.com/navidrome/navidrome/log"
+	"github.com/navidrome/navidrome/model"
+	"github.com/navidrome/navidrome/model/request"
 )
 
 type playlistSyncTask struct {
-	ID                    string
-	NavidromPlaylistID    string
-	PlaylistID            string
-	PlaylistName          string
-	PlaylistCover         string
-	SourceType            string
-	Status                string // syncing, sync-completed, sync-error
-	Progress              int
-	RemainingCount        int
-	CurrentSongIndex      int
-	CurrentSongTitle      string
-	SourceName            string
-	Songs                 []map[string]any
-	CompletedSongs        []string // List of song IDs that have been added to Navidrome
-	FailedSongs           []string
-	DownloadQueue         []map[string]any
-	DownloadTaskIDMap     map[string]int // Maps download task ID to song index
-	CurrentDownloadID     string
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	LastProgressUpdate    time.Time
-	NameTemplate          []string
-	DownloadPath          string
-	PreferredQuality      string // User-selected quality
-	QualityFallbackOrder  []string // Fallback order for quality degradation
-	PauseRequested        bool
-	CurrentCancel         context.CancelFunc
-	Running               bool
+	ID                   string
+	NavidromPlaylistID   string
+	PlaylistID           string
+	PlaylistName         string
+	PlaylistCover        string
+	SourceType           string
+	Status               string // syncing, sync-completed, sync-error
+	Progress             int
+	RemainingCount       int
+	CurrentSongIndex     int
+	CurrentSongTitle     string
+	SourceName           string
+	Songs                []map[string]any
+	CompletedSongs       []string // List of song IDs that have been added to Navidrome
+	FailedSongs          []string
+	DownloadQueue        []map[string]any
+	DownloadTaskIDMap    map[string]int // Maps download task ID to song index
+	CurrentDownloadID    string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	LastProgressUpdate   time.Time
+	NameTemplate         []string
+	DownloadPath         string
+	PreferredQuality     string   // User-selected quality
+	QualityFallbackOrder []string // Fallback order for quality degradation
+	PauseRequested       bool
+	CurrentCancel        context.CancelFunc
+	Running              bool
+	RequestUser          model.User
 }
 
 type playlistSyncStartRequest struct {
-	TaskID                string         `json:"taskId"`
-	NavidromPlaylistID    string         `json:"navidromPlaylistId"`
-	PlaylistName          string         `json:"playlistName,omitempty"`
-	PlaylistCover         string         `json:"playlistCover,omitempty"`
-	Songs                 []map[string]any `json:"songs"`
-	PreferredQuality      string         `json:"preferredQuality,omitempty"`
+	TaskID             string           `json:"taskId"`
+	NavidromPlaylistID string           `json:"navidromPlaylistId"`
+	PlaylistName       string           `json:"playlistName,omitempty"`
+	PlaylistCover      string           `json:"playlistCover,omitempty"`
+	Songs              []map[string]any `json:"songs"`
+	PreferredQuality   string           `json:"preferredQuality,omitempty"`
 }
 
 type playlistSyncStatusResponse struct {
@@ -87,6 +91,9 @@ var playlistSyncTasks = struct {
 	items map[string]*playlistSyncTask
 }{items: map[string]*playlistSyncTask{}}
 
+var playlistImportService core.Library
+var playlistSyncDataStore model.DataStore
+
 const playlistSyncTaskTTL = 2 * time.Hour
 
 func handlePlaylistSyncStart(w http.ResponseWriter, r *http.Request) {
@@ -100,6 +107,8 @@ func handlePlaylistSyncStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing taskId or navidromPlaylistId", http.StatusBadRequest)
 		return
 	}
+
+	requestUser, _ := request.UserFrom(r.Context())
 
 	// Create or get the sync task
 	playlistSyncTasks.Lock()
@@ -122,11 +131,11 @@ func handlePlaylistSyncStart(w http.ResponseWriter, r *http.Request) {
 
 		// Create new task
 		task = &playlistSyncTask{
-			ID:                   req.TaskID,
-			NavidromPlaylistID:   req.NavidromPlaylistID,
-			PlaylistName:         req.PlaylistName,
-			PlaylistCover:        req.PlaylistCover,
-			SourceType:           func() string {
+			ID:                 req.TaskID,
+			NavidromPlaylistID: req.NavidromPlaylistID,
+			PlaylistName:       req.PlaylistName,
+			PlaylistCover:      req.PlaylistCover,
+			SourceType: func() string {
 				if len(req.Songs) > 0 {
 					if src := stringValue(req.Songs[0]["source"]); src != "" {
 						return src
@@ -148,6 +157,7 @@ func handlePlaylistSyncStart(w http.ResponseWriter, r *http.Request) {
 			NameTemplate:         nameTemplate,
 			PreferredQuality:     req.PreferredQuality,
 			QualityFallbackOrder: getQualityFallbackOrder(req.PreferredQuality),
+			RequestUser:          requestUser,
 		}
 
 		playlistSyncTasks.Lock()
@@ -159,6 +169,7 @@ func handlePlaylistSyncStart(w http.ResponseWriter, r *http.Request) {
 		task.PlaylistName = req.PlaylistName
 		task.PlaylistCover = req.PlaylistCover
 		task.Songs = req.Songs
+		task.RequestUser = requestUser
 		if len(req.Songs) > 0 {
 			if src := stringValue(req.Songs[0]["source"]); src != "" {
 				task.SourceType = src
@@ -393,8 +404,11 @@ func syncPlaylistSongs(task *playlistSyncTask) {
 		playlistSyncTasks.Unlock()
 	}()
 
-	log.Debug(nil, "syncPlaylistSongs started", "taskID", task.ID, "songCount", len(task.Songs))
-	
+	log.Debug(nil, "syncPlaylistSongs started", "taskID", task.ID, "songCount", len(task.Songs), "navidromPlaylistID", task.NavidromPlaylistID, "userId", task.RequestUser.ID)
+	if task.RequestUser.ID == "" {
+		log.Warn(nil, "syncPlaylistSongs: RequestUser is empty, continue without user context", "taskID", task.ID)
+	}
+
 	if len(task.Songs) == 0 {
 		log.Debug(nil, "No songs to sync, marking as completed", "taskID", task.ID)
 		task.Status = "sync-completed"
@@ -466,8 +480,8 @@ func syncPlaylistSongs(task *playlistSyncTask) {
 		}
 
 		// Add the downloaded song to Navidrome playlist
-		if err := addSongToNavidromPlaylist(task.NavidromPlaylistID, song, downloadedFilePath); err != nil {
-			log.Error(nil, "Failed to add song to Navidrome playlist", err, "songName", task.CurrentSongTitle)
+		if err := addSongToNavidromPlaylist(task.RequestUser, task.NavidromPlaylistID, song, downloadedFilePath); err != nil {
+			log.Error(nil, "Failed to add song to Navidrome playlist", "error", err, "songName", task.CurrentSongTitle, "playlistId", task.NavidromPlaylistID)
 			task.FailedSongs = append(task.FailedSongs, task.CurrentSongTitle)
 			task.Status = "sync-error"
 			task.UpdatedAt = time.Now()
@@ -490,7 +504,7 @@ func syncPlaylistSongs(task *playlistSyncTask) {
 
 	// Ensure final status is set correctly
 	log.Debug(nil, "Sync loop finished", "taskID", task.ID, "status", task.Status, "remaining", task.RemainingCount, "completed", len(task.CompletedSongs), "total", len(task.Songs))
-	
+
 	if task.Status == "syncing" {
 		task.Status = "sync-completed"
 		task.Progress = 100
@@ -548,17 +562,17 @@ func getDownloadTaskFilePath(downloadID string) string {
 }
 
 // addSongToNavidromPlaylist adds a downloaded song to the Navidrome playlist
-func addSongToNavidromPlaylist(playlistID string, song map[string]any, filePath string) error {
-	// Import the audio file to Navidrome library
-	mediaID, err := importAudioFileToNavidrome(filePath)
+func addSongToNavidromPlaylist(user model.User, playlistID string, song map[string]any, filePath string) error {
+	// Import the audio file to Navidrome library with user context
+	mediaID, err := importAudioFileToNavidrome(user, filePath)
 	if err != nil {
-		log.Error(nil, "Failed to import audio file to Navidrome", err)
+		log.Error(nil, "Failed to import audio file to Navidrome", "error", err)
 		return err
 	}
 
 	// Add the media to the playlist
-	if err := addMediaToPlaylist(playlistID, mediaID); err != nil {
-		log.Error(nil, "Failed to add media to playlist", err)
+	if err := addMediaToPlaylist(user, playlistID, mediaID); err != nil {
+		log.Error(nil, "Failed to add media to playlist", "error", err)
 		return err
 	}
 
@@ -581,7 +595,7 @@ func broadcastPlaylistSyncChange() {
 // getQualityFallbackOrder returns the fallback order for quality degradation
 func getQualityFallbackOrder(preferredQuality string) []string {
 	qualityOrder := []string{"flac24bit", "flac", "ape", "320k", "128k"}
-	
+
 	// If preferred quality is specified and in the list, start from there
 	if preferredQuality != "" {
 		result := []string{preferredQuality}
@@ -592,7 +606,7 @@ func getQualityFallbackOrder(preferredQuality string) []string {
 		}
 		return result
 	}
-	
+
 	return qualityOrder
 }
 
@@ -670,7 +684,7 @@ func downloadSongWithQualityFallback(song map[string]any, sourceStr string, qual
 		"hasQualitys", mapValue(song["qualitys"]) != nil,
 		"hasTypes", mapValue(song["types"]) != nil,
 	)
-	
+
 	normalized := normalizeOnlineDownloadSongInfo(song)
 
 	for _, quality := range qualityOrder {
@@ -787,7 +801,7 @@ func downloadSongWithQualityFallback(song map[string]any, sourceStr string, qual
 			return savedPath, sourceName, nil
 		}
 	}
-	
+
 	// All qualities failed
 	if lastErr != nil {
 		return "", "", lastErr
@@ -831,34 +845,66 @@ func copyFile(srcPath, dstPath string) error {
 }
 
 // importAudioFileToNavidrome imports an audio file to Navidrome library and returns the media ID
-func importAudioFileToNavidrome(filePath string) (string, error) {
-	// TODO: Implement actual file import to Navidrome library
-	// This should:
-	// 1. Copy or scan the file into Navidrome's configured music folder
-	// 2. Trigger library refresh if needed
-	// 3. Return the generated media ID
-	
-	log.Debug(nil, "Importing audio file to Navidrome", "filePath", filePath)
-	
-	// Placeholder: simulate import and return a dummy media ID
-	// In real implementation, this would interact with Navidrome's media library
-	return fmt.Sprintf("import_%d", time.Now().UnixNano()), nil
+func importAudioFileToNavidrome(user model.User, filePath string) (string, error) {
+	if playlistImportService == nil {
+		return "", fmt.Errorf("library import service is not configured")
+	}
+
+	ctx := context.Background()
+	if user.ID != "" {
+		ctx = request.WithUser(ctx, user)
+	}
+	mediaID, err := playlistImportService.ImportMediaFile(ctx, filePath)
+	if err != nil {
+		return "", err
+	}
+
+	log.Debug(nil, "Imported audio file to Navidrome", "filePath", filePath, "mediaId", mediaID, "userId", user.ID)
+	return mediaID, nil
 }
 
 // addMediaToPlaylist adds a media ID to a Navidrome playlist
-func addMediaToPlaylist(playlistID string, mediaID string) error {
-	// TODO: Implement actual API call to add media to playlist
-	// This should call the Navidrome API: PUT /rest/updatePlaylist.view
-	// with parameters: playlistId, songIdToAdd
-	
-	log.Debug(nil, "Adding media to playlist",
+func addMediaToPlaylist(user model.User, playlistID string, mediaID string) error {
+	if playlistSyncDataStore == nil {
+		return fmt.Errorf("playlist datastore is not configured")
+	}
+
+	if playlistID == "" {
+		return fmt.Errorf("playlist ID is empty")
+	}
+
+	if mediaID == "" {
+		return fmt.Errorf("media ID is empty")
+	}
+
+	log.Debug(nil, "addMediaToPlaylist: starting", "playlistId", playlistID, "mediaId", mediaID, "userId", user.ID)
+
+	ctx := context.Background()
+	if user.ID != "" {
+		ctx = request.WithUser(ctx, user)
+	}
+	playlistRepo := playlistSyncDataStore.Playlist(ctx)
+	log.Debug(nil, "addMediaToPlaylist: got playlist repo", "playlistId", playlistID)
+
+	pls, err := playlistRepo.GetWithTracks(playlistID, false, true)
+	if err != nil {
+		log.Error(nil, "addMediaToPlaylist: GetWithTracks failed", "error", err, "playlistId", playlistID, "userId", user.ID)
+		return err
+	}
+
+	log.Debug(nil, "addMediaToPlaylist: got playlist", "playlistId", playlistID, "songCount", pls.SongCount)
+
+	pls.AddMediaFilesByID([]string{mediaID})
+	if err := playlistRepo.Put(pls); err != nil {
+		log.Error(nil, "addMediaToPlaylist: Put failed", "error", err, "playlistId", playlistID, "mediaId", mediaID, "userId", user.ID)
+		return err
+	}
+
+	log.Debug(nil, "Added media to playlist",
 		"playlistId", playlistID,
 		"mediaId", mediaID,
+		"trackCount", pls.SongCount,
 	)
-	
-	// Placeholder: in real implementation, this would make an HTTP call
-	// to the Navidrome API endpoint
+
 	return nil
 }
-
-

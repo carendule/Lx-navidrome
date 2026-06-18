@@ -632,6 +632,15 @@ func (api *Router) addOnlineDownloadRoutes(r chi.Router) {
 		r.Get("/browser/file/{taskID}", api.onlineBrowserDownloadFile)
 		r.Post("/browser", api.onlineBrowserDownload)
 	})
+
+	// Playlist sync endpoints require authenticated user context.
+	r.Post("/online/playlist/sync/start", handlePlaylistSyncStart)
+	r.Get("/online/playlist/sync/status/{taskID}", handlePlaylistSyncStatus)
+	r.Get("/online/playlist/sync/tasks", handlePlaylistSyncTasks)
+	r.Post("/online/playlist/sync/tasks/retry", handlePlaylistSyncRetryAll)
+	r.Post("/online/playlist/sync/tasks/cancel", handlePlaylistSyncCancelAll)
+	r.Post("/online/playlist/sync/tasks/clear-completed", handlePlaylistSyncClearCompleted)
+	r.Post("/online/playlist/sync/tasks/clear-failed", handlePlaylistSyncClearFailed)
 }
 
 func (api *Router) onlineBrowserDownloadStart(w http.ResponseWriter, r *http.Request) {

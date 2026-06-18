@@ -522,6 +522,59 @@ const OnlineSearch = () => {
             throw new Error('playlist_id_missing')
           }
 
+          const playlistComment = (syncTask.playlistComment || '').trim()
+          if (playlistComment) {
+            try {
+              const updatePlaylistUrl = subsonic.url('updatePlaylist', null, {
+                playlistId: navidromPlaylistId,
+                comment: playlistComment,
+              })
+              console.log('[playlist-sync] update playlist comment request url', {
+                updatePlaylistUrl,
+                navidromPlaylistId,
+                commentLength: playlistComment.length,
+              })
+
+              const updatePlaylistRes = await httpClient(updatePlaylistUrl, {
+                method: 'GET',
+              })
+              console.log('[playlist-sync] update playlist comment response', {
+                status: updatePlaylistRes?.status,
+                ok: updatePlaylistRes?.status >= 200 && updatePlaylistRes?.status < 300,
+                navidromPlaylistId,
+              })
+            } catch (commentError) {
+              console.warn('[playlist-sync] failed to update playlist comment', {
+                error: commentError,
+                message: commentError?.message,
+                navidromPlaylistId,
+              })
+            }
+          }
+
+          const playlistCover = (syncTask.cover || '').trim()
+          if (playlistCover) {
+            try {
+              const fetchCoverRes = await httpClient(`/api/playlist/${navidromPlaylistId}/image/fetch`, {
+                method: 'POST',
+                body: JSON.stringify({ imageUrl: playlistCover }),
+              })
+              console.log('[playlist-sync] fetch playlist cover response', {
+                status: fetchCoverRes?.status,
+                ok: fetchCoverRes?.status >= 200 && fetchCoverRes?.status < 300,
+                navidromPlaylistId,
+                playlistCover,
+              })
+            } catch (coverError) {
+              console.warn('[playlist-sync] failed to fetch playlist cover', {
+                error: coverError,
+                message: coverError?.message,
+                navidromPlaylistId,
+                playlistCover,
+              })
+            }
+          }
+
           setPlaylistSyncTasks((prev) =>
             prev.map((t) =>
               t.id === taskId

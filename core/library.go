@@ -32,6 +32,7 @@ type Library interface {
 	GetUserLibraries(ctx context.Context, userID string) (model.Libraries, error)
 	SetUserLibraries(ctx context.Context, userID string, libraryIDs []int) error
 	ValidateLibraryAccess(ctx context.Context, userID string, libraryID int) error
+	ImportMediaFile(ctx context.Context, filePath string, libraryID ...int) (string, error)
 
 	NewRepository(ctx context.Context) rest.Repository
 }

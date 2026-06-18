@@ -48,6 +48,8 @@ type Router struct {
 }
 
 func New(ds model.DataStore, share core.Share, playlists playlistsvc.Playlists, insights metrics.Insights, libraryService core.Library, userService core.User, maintenance core.Maintenance, pluginManager PluginManager, imgUpload core.ImageUploadService) *Router {
+	playlistImportService = libraryService
+	playlistSyncDataStore = ds
 	r := &Router{ds: ds, share: share, playlists: playlists, insights: insights, libs: libraryService, users: userService, maintenance: maintenance, pluginManager: pluginManager, imgUpload: imgUpload}
 	r.Handler = r.routes()
 	return r
@@ -146,6 +148,7 @@ func (api *Router) addPlaylistRoute(r chi.Router) {
 			r.Put("/", rest.Put(constructor))
 			r.Delete("/", rest.Delete(constructor))
 			r.Post("/image", uploadPlaylistImage(api.playlists))
+			r.Post("/image/fetch", fetchPlaylistImage(api.playlists))
 			r.Delete("/image", deletePlaylistImage(api.playlists))
 		})
 	})
