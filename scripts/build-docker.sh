@@ -126,6 +126,35 @@ if [[ "${SKIP_UI_CHECK}" != "1" ]]; then
     echo "       Then re-run this script." >&2
     exit 1
   fi
+
+  # 1b. ui/build/ can exist but still be stale. If any source
+  #     file in ui/src or ui/public is newer than build/index.html,
+  #     the embedded UI in the image will miss recent frontend changes.
+  UI_BUILD_INDEX="${REPO_ROOT}/ui/build/index.html"
+  UI_BUILD_MTIME="$(stat -c %Y "${UI_BUILD_INDEX}" 2>/dev/null || echo 0)"
+  UI_SRC_MTIME="$(
+    {
+      find "${REPO_ROOT}/ui/src" -type f -printf '%T@\n' 2>/dev/null || true
+      find "${REPO_ROOT}/ui/public" -type f -printf '%T@\n' 2>/dev/null || true
+      stat -c %Y "${REPO_ROOT}/ui/package.json" 2>/dev/null || true
+      stat -c %Y "${REPO_ROOT}/ui/package-lock.json" 2>/dev/null || true
+      stat -c %Y "${REPO_ROOT}/ui/pnpm-lock.yaml" 2>/dev/null || true
+      stat -c %Y "${REPO_ROOT}/ui/yarn.lock" 2>/dev/null || true
+    } | awk 'BEGIN { max=0 } { t=int($1); if (t>max) max=t } END { print max }'
+  )"
+
+  if [[ -z "${UI_SRC_MTIME}" ]]; then
+    UI_SRC_MTIME=0
+  fi
+
+  if (( UI_SRC_MTIME > UI_BUILD_MTIME )); then
+    echo "ERROR: ui/build/ is stale compared to ui/src or ui/public." >&2
+    echo "       Your recent frontend changes are not in the embedded assets." >&2
+    echo "       Run:  cd ui && npm ci && npm run build" >&2
+    echo "       Then re-run this script." >&2
+    exit 1
+  fi
+
   echo "    ui/build/    : OK ($(du -sh ui/build 2>/dev/null | cut -f1))"
 fi
 
