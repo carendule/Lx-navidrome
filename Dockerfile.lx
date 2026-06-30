@@ -46,8 +46,20 @@ FROM golang:1.26-bookworm AS build
 ARG TARGETARCH=amd64
 ARG GIT_SHA=unknown
 ARG GIT_TAG=lx-snapshot
+ARG CUSTOM_CA_CERT_B64=
 
 WORKDIR /src
+
+# Ensure TLS trust store is present before downloading Go modules.
+# Some environments fail `go mod download` with x509 unknown authority
+# if CA certificates are not installed in the build stage.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    if [ -n "${CUSTOM_CA_CERT_B64}" ]; then \
+    echo "${CUSTOM_CA_CERT_B64}" | base64 -d > /usr/local/share/ca-certificates/custom-proxy-ca.crt; \
+    fi && \
+    update-ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 # Copy the go module manifests first so the dependency layer
 # is cacheable independent of the source. The /go/pkg/mod
@@ -69,10 +81,10 @@ COPY . .
 # doesn't ship it by default.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        libc6-dev \
-        gcc \
-        zlib1g-dev \
-        file && \
+    libc6-dev \
+    gcc \
+    zlib1g-dev \
+    file && \
     rm -rf /var/lib/apt/lists/*
 
 # Build the binary. The `-linkmode=external` + `cc` combo
@@ -92,19 +104,19 @@ ENV GOARM=${GOARM} \
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go build \
-        -tags=netgo,sqlite_fts5 \
-        -trimpath \
-        -ldflags="-w -s \
-            -X github.com/navidrome/navidrome/consts.gitSha=${GIT_SHA} \
-            -X github.com/navidrome/navidrome/consts.gitTag=${GIT_TAG}" \
-        -o /out/navidrome .
+    -tags=netgo,sqlite_fts5 \
+    -trimpath \
+    -ldflags="-w -s \
+    -X github.com/navidrome/navidrome/consts.gitSha=${GIT_SHA} \
+    -X github.com/navidrome/navidrome/consts.gitTag=${GIT_TAG}" \
+    -o /out/navidrome .
 
 # Sanity check: a static binary can't dlopen libwebp.
 # Fail the build if the linker dropped the dynamic section
 # (the upstream Dockerfile does the same check).
 RUN file /out/navidrome | grep -q "dynamically linked" || \
     (echo "ERROR: /out/navidrome is not dynamically linked" && \
-     file /out/navidrome && exit 1)
+    file /out/navidrome && exit 1)
 
 ########################################################################################################################
 ### Stage 2: final runtime image.
@@ -115,10 +127,12 @@ RUN file /out/navidrome | grep -q "dynamically linked" || \
 ### avoid the musl-vs-glibc shared-library confusion.
 FROM debian:bookworm-slim AS final
 
+ARG CUSTOM_CA_CERT_B64=
+
 LABEL maintainer="conor" \
-      org.opencontainers.image.source="https://github.com/conor/lx-navidrome" \
-      org.opencontainers.image.title="Lx-Navidrome" \
-      org.opencontainers.image.description="Self-hosted music server with online-source embed (fork of navidrome)"
+    org.opencontainers.image.source="https://github.com/conor/lx-navidrome" \
+    org.opencontainers.image.title="Lx-Navidrome" \
+    org.opencontainers.image.description="Self-hosted music server with online-source embed (fork of navidrome)"
 
 # Runtime deps:
 #   - ffmpeg: hard dep for the embed pipeline.
@@ -149,14 +163,18 @@ LABEL maintainer="conor" \
 #     leaving zombies.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        ffmpeg \
-        libwebp7 \
-        libwebpdemux2 \
-        libwebpmux3 \
-        sqlite3 \
-        tini && \
+    ca-certificates \
+    curl \
+    ffmpeg \
+    libwebp7 \
+    libwebpdemux2 \
+    libwebpmux3 \
+    sqlite3 \
+    tini && \
+    if [ -n "${CUSTOM_CA_CERT_B64}" ]; then \
+    echo "${CUSTOM_CA_CERT_B64}" | base64 -d > /usr/local/share/ca-certificates/custom-proxy-ca.crt; \
+    fi && \
+    update-ca-certificates && \
     rm -rf /var/lib/apt/lists/* && \
     # Install Node.js v24 (matches .nvmrc). NodeSource's
     # setup script is the standard way to pin a Node
@@ -181,18 +199,18 @@ RUN apt-get update && \
 ARG TARGETARCH
 RUN set -eux; \
     case "${TARGETARCH}" in \
-        amd64)  triplet=x86_64-linux-gnu ;; \
-        arm64)  triplet=aarch64-linux-gnu ;; \
-        arm)    triplet=arm-linux-gnueabihf ;; \
-        386)    triplet=i386-linux-gnu ;; \
-        *)      triplet=x86_64-linux-gnu ;; \
+    amd64)  triplet=x86_64-linux-gnu ;; \
+    arm64)  triplet=aarch64-linux-gnu ;; \
+    arm)    triplet=arm-linux-gnueabihf ;; \
+    386)    triplet=i386-linux-gnu ;; \
+    *)      triplet=x86_64-linux-gnu ;; \
     esac; \
     mkdir -p /usr/lib/${triplet}; \
     for lib in libwebp libwebpdemux libwebpmux; do \
-        so=$(ls /usr/lib/${triplet}/$lib.so.* 2>/dev/null | head -1 || true); \
-        if [ -n "$so" ]; then \
-            ln -sf "$so" /usr/lib/${triplet}/$lib.so; \
-        fi; \
+    so=$(ls /usr/lib/${triplet}/$lib.so.* 2>/dev/null | head -1 || true); \
+    if [ -n "$so" ]; then \
+    ln -sf "$so" /usr/lib/${triplet}/$lib.so; \
+    fi; \
     done
 
 # Copy the binary from the build stage.

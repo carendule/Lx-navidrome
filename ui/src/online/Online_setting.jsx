@@ -33,7 +33,7 @@ import {
   fetchOnlineEmbedMode,
   fetchOnlineNameTemplate,
   saveOnlineEmbedMode,
-} from './online_source_settings_api'
+} from './Online_source_settings_api'
 
 const ONLINE_SOURCE_STATUS_CHANGED_EVENT = 'nd:online-source-status-changed'
 
@@ -361,7 +361,7 @@ const shallowEqualStringArray = (a, b) => {
 }
 
 // NAME_TEMPLATE_TOKENS and NAME_TEMPLATE_DEFAULT are now imported
-// from ./online_source_settings_api so the search page can re-use
+// from ./Online_source_settings_api so the search page can re-use
 // them and stay in sync with this page.
 
 // embedModeDefaultLabel is the *fallback* label for the embed-mode
@@ -890,7 +890,7 @@ const OnlineSetting = () => {
             if (json.requireUnsafe && !allowUnsafeVM) {
               const confirmed = window.confirm(
                 json.message ||
-                  '该脚本需要原生 VM 模式运行，可能存在安全风险，是否继续？',
+                '该脚本需要原生 VM 模式运行，可能存在安全风险，是否继续？',
               )
               if (!confirmed) {
                 return null

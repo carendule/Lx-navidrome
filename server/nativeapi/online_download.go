@@ -632,6 +632,15 @@ func (api *Router) addOnlineDownloadRoutes(r chi.Router) {
 		r.Get("/browser/file/{taskID}", api.onlineBrowserDownloadFile)
 		r.Post("/browser", api.onlineBrowserDownload)
 	})
+
+	// Playlist sync endpoints require authenticated user context.
+	r.Post("/online/playlist/sync/start", handlePlaylistSyncStart)
+	r.Get("/online/playlist/sync/status/{taskID}", handlePlaylistSyncStatus)
+	r.Get("/online/playlist/sync/tasks", handlePlaylistSyncTasks)
+	r.Post("/online/playlist/sync/tasks/retry", handlePlaylistSyncRetryAll)
+	r.Post("/online/playlist/sync/tasks/cancel", handlePlaylistSyncCancelAll)
+	r.Post("/online/playlist/sync/tasks/clear-completed", handlePlaylistSyncClearCompleted)
+	r.Post("/online/playlist/sync/tasks/clear-failed", handlePlaylistSyncClearFailed)
 }
 
 func (api *Router) onlineBrowserDownloadStart(w http.ResponseWriter, r *http.Request) {
@@ -1344,6 +1353,10 @@ func downloadOnlineServerTaskToPath(ctx context.Context, taskID string) (*fetche
 
 	if written <= 0 {
 		return nil, fmt.Errorf("upstream returned empty audio payload")
+	}
+	if err := validateOnlineDownloadedAudio(task.TempPath, resp.Header.Get("Content-Type"), written); err != nil {
+		_ = os.Remove(task.TempPath)
+		return nil, err
 	}
 
 	if err := file.Close(); err != nil {
@@ -2577,6 +2590,10 @@ func fetchOnlineDownloadToTempFile(
 		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("upstream returned empty audio payload")
 	}
+	if err := validateOnlineDownloadedAudio(tmpPath, resp.Header.Get("Content-Type"), written); err != nil {
+		_ = os.Remove(tmpPath)
+		return nil, err
+	}
 
 	if written <= 4096 {
 		probe, _ := os.ReadFile(tmpPath)
@@ -2687,6 +2704,76 @@ func detectFileExtension(contentType string, requestPath string) string {
 		}
 	}
 	return ".mp3"
+}
+
+func validateOnlineDownloadedAudio(filePath, rawContentType string, size int64) error {
+	if size <= 0 {
+		return fmt.Errorf("upstream returned empty audio payload")
+	}
+	if size < 512 {
+		return fmt.Errorf("downloaded payload too small (%d bytes), not a valid audio file", size)
+	}
+
+	contentTypeLower := strings.ToLower(strings.TrimSpace(rawContentType))
+	if strings.Contains(contentTypeLower, "application/json") ||
+		strings.Contains(contentTypeLower, "text/") ||
+		strings.Contains(contentTypeLower, "javascript") ||
+		strings.Contains(contentTypeLower, "xml") ||
+		strings.Contains(contentTypeLower, "application/x-www-form-urlencoded") {
+		return fmt.Errorf("upstream returned non-audio content-type: %s", strings.TrimSpace(rawContentType))
+	}
+
+	b, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("cannot read downloaded file: %w", err)
+	}
+	if len(b) == 0 {
+		return fmt.Errorf("downloaded file is empty")
+	}
+
+	trimmed := strings.ToLower(strings.TrimSpace(string(b[:minInt(len(b), 256)])))
+	if strings.HasPrefix(trimmed, "<") ||
+		strings.HasPrefix(trimmed, "{") ||
+		strings.HasPrefix(trimmed, "[") ||
+		strings.Contains(trimmed, "<!doctype") ||
+		strings.Contains(trimmed, "<html") ||
+		strings.Contains(trimmed, "<?php") ||
+		strings.Contains(trimmed, "use_cookie") {
+		return fmt.Errorf("upstream returned placeholder/html/json payload instead of audio")
+	}
+
+	head := b
+	if len(head) > 16 {
+		head = head[:16]
+	}
+	hasKnownAudioMagic := false
+	switch {
+	case len(head) >= 3 && bytes.Equal(head[:3], []byte("ID3")):
+		hasKnownAudioMagic = true
+	case len(head) >= 2 && head[0] == 0xFF && (head[1]&0xE0) == 0xE0:
+		hasKnownAudioMagic = true
+	case len(head) >= 4 && bytes.Equal(head[:4], []byte("fLaC")):
+		hasKnownAudioMagic = true
+	case len(head) >= 4 && bytes.Equal(head[:4], []byte("OggS")):
+		hasKnownAudioMagic = true
+	case len(head) >= 12 && bytes.Equal(head[:4], []byte("RIFF")) && bytes.Equal(head[8:12], []byte("WAVE")):
+		hasKnownAudioMagic = true
+	case len(head) >= 12 && bytes.Equal(head[4:8], []byte("ftyp")):
+		hasKnownAudioMagic = true
+	}
+
+	if !hasKnownAudioMagic && size < 16*1024 {
+		return fmt.Errorf("downloaded file does not look like valid audio (size=%d bytes)", size)
+	}
+
+	return nil
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func contentDispositionValue(fileName string) string {

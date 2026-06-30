@@ -1,4 +1,4 @@
-// online_source_settings_api.jsx
+// Online_source_settings_api.jsx
 //
 // Tiny shared module that wraps /api/online/source/settings so the
 // search and settings pages can both read & write the user-configured

@@ -1,328 +1,132 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { Title, useNotify, useTranslate } from 'react-admin'
+import { Title, useNotify } from 'react-admin'
 import {
-  Avatar,
-  Box,
   Button,
-  Card,
-  CardContent,
-  Chip,
   CircularProgress,
   Dialog,
   DialogContent,
   DialogTitle,
-  Grid,
-  IconButton,
-  InputAdornment,
-  MenuItem,
-  Select,
-  TextField,
   Typography,
 } from '@material-ui/core'
 import { makeStyles } from '@material-ui/core/styles'
-import GetAppIcon from '@material-ui/icons/GetApp'
-import SearchIcon from '@material-ui/icons/Search'
-import RefreshIcon from '@material-ui/icons/Refresh'
-import {
-  clientUniqueId,
-  clientUniqueIdHeader,
-  httpClient,
-} from '../dataProvider'
+import { clientUniqueId, clientUniqueIdHeader, httpClient } from '../dataProvider'
 import { baseUrl } from '../utils'
-import { fetchOnlineNameTemplate } from './online_source_settings_api'
+import { fetchOnlineNameTemplate } from './Online_source_settings_api'
+import OnlineSongSearch from './Online_song_search'
+import OnlinePlaylistSearch from './Online_playlist_search'
+import subsonic from '../subsonic'
 
 const ONLINE_DOWNLOAD_TASK_CHANGED_EVENT = 'nd:online-download-task-changed'
+const ONLINE_PLAYLIST_SYNC_TASKS_CLEARED_EVENT = 'nd:playlist-sync-tasks-cleared'
 
-const SOURCES = [
-  { key: 'wy', label: '网易云' },
-  { key: 'tx', label: 'QQ音乐' },
-  { key: 'kg', label: '酷狗' },
-  { key: 'kw', label: '酷我' },
-  { key: 'mg', label: '咪咕' },
-]
-
-const TYPES = [
-  { key: 'song', label: '歌曲' },
-  { key: 'singer', label: '歌手' },
-  { key: 'album', label: '专辑' },
-]
-
-const SOURCE_BADGE = {
-  wy: { bg: '#fde2e2', color: '#a13030', name: '网易' },
-  tx: { bg: '#d7f6e8', color: '#1f7a53', name: 'QQ' },
-  kg: { bg: '#dfe8ff', color: '#2c4ca3', name: '酷狗' },
-  kw: { bg: '#fdeccf', color: '#935b00', name: '酷我' },
-  mg: { bg: '#ffe1ea', color: '#a3335d', name: '咪咕' },
+const VIEW_MODES = {
+  song: 'song',
+  playlist: 'playlist',
 }
 
-const RANK_COLORS = [
-  { bg: '#f5483b', color: '#fff' },
-  { bg: '#f97c3c', color: '#fff' },
-  { bg: '#ffb03a', color: '#fff' },
-]
+const QUALITY_META = {
+  master: { label: 'Master', bg: '#f0e4ff', color: '#6d35b2' },
+  flac24bit: { label: 'Hi-Res', bg: '#fff2cc', color: '#8d5f00' },
+  ape: { label: 'APE', bg: '#ffe4cc', color: '#9a4d00' },
+  flac: { label: 'FLAC', bg: '#dff6e7', color: '#1f7a53' },
+  '320k': { label: '320k', bg: '#dce8ff', color: '#2c4ca3' },
+  '128k': { label: '128k', bg: '#ececec', color: '#555' },
+}
 
 const useStyles = makeStyles((theme) => ({
   root: {
     padding: theme.spacing(2),
-  },
-  searchRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: theme.spacing(1),
-    marginBottom: theme.spacing(3),
-    flexWrap: 'wrap',
-    justifyContent: 'flex-start',
-  },
-  searchInput: {
-    width: 320,
-    flexShrink: 0,
-  },
-  selectControl: {
-    '& .MuiOutlinedInput-input': {
-      paddingTop: 10,
-      paddingBottom: 10,
-    },
-  },
-  searchBtn: {
-    height: 40,
-    minWidth: 80,
-    flexShrink: 0,
-    textTransform: 'none',
-  },
-  typeSelect: {
-    minWidth: 95,
-  },
-  sourceSelect: {
-    minWidth: 110,
-  },
-  hotCard: {
-    borderRadius: 12,
-  },
-  hotHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: theme.spacing(1),
-    marginBottom: theme.spacing(2),
-  },
-  hotTitle: {
-    fontWeight: 700,
-    fontSize: '1.05rem',
-  },
-  hotGrid: {
-    marginTop: theme.spacing(0.5),
-  },
-  hotItem: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: theme.spacing(1),
-    padding: theme.spacing(0.9, 1.5),
-    borderRadius: 8,
-    cursor: 'pointer',
-    transition: 'background-color 0.15s',
-    '&:hover': {
-      backgroundColor: theme.palette.action.hover,
-    },
-    '&:hover $hotSearchHint': {
-      opacity: 1,
-    },
-  },
-  rankBadge: {
-    width: 24,
-    height: 24,
-    borderRadius: '50%',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: '0.7rem',
-    fontWeight: 700,
-    flexShrink: 0,
-    backgroundColor: theme.palette.action.selected,
-    color: theme.palette.text.secondary,
-  },
-  hotWord: {
-    flex: 1,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    fontSize: '0.9rem',
-    color: theme.palette.text.primary,
-  },
-  hotSearchHint: {
-    opacity: 0,
-    color: theme.palette.text.disabled,
-    fontSize: '0.9rem',
-    transition: 'opacity 0.15s',
-    flexShrink: 0,
-  },
-  loadingBox: {
-    display: 'flex',
-    justifyContent: 'center',
-    padding: theme.spacing(5),
-  },
-  emptyBox: {
-    textAlign: 'center',
-    padding: theme.spacing(4),
-    color: theme.palette.text.secondary,
-  },
-  refreshRow: {
-    display: 'flex',
-    justifyContent: 'center',
-    marginTop: theme.spacing(2),
-  },
-  refreshBtn: {
-    borderRadius: 999,
-    textTransform: 'none',
-    color: theme.palette.text.secondary,
-  },
-  resultCard: {
-    marginTop: theme.spacing(2),
-    borderRadius: 12,
-    border: `1px solid ${theme.palette.divider}`,
-    overflow: 'hidden',
-  },
-  tableHeader: {
-    display: 'grid',
-    gridTemplateColumns:
-      '56px minmax(260px, 2fr) minmax(160px, 1.2fr) minmax(160px, 1.2fr) 90px 80px',
-    gap: theme.spacing(1),
-    alignItems: 'center',
-    padding: theme.spacing(1.2, 2),
-    borderBottom: `1px solid ${theme.palette.divider}`,
-    color: theme.palette.text.secondary,
-    fontSize: '0.82rem',
-    fontWeight: 600,
-    [theme.breakpoints.down('sm')]: {
-      gridTemplateColumns: '42px minmax(170px, 2fr) minmax(110px, 1fr) 66px',
-      padding: theme.spacing(1, 1.2),
-    },
-  },
-  resultRow: {
-    display: 'grid',
-    gridTemplateColumns:
-      '56px minmax(260px, 2fr) minmax(160px, 1.2fr) minmax(160px, 1.2fr) 90px 80px',
-    gap: theme.spacing(1),
-    alignItems: 'center',
-    padding: theme.spacing(1.2, 2),
-    borderBottom: `1px solid ${theme.palette.divider}`,
-    [theme.breakpoints.down('sm')]: {
-      gridTemplateColumns: '42px minmax(170px, 2fr) minmax(110px, 1fr) 66px',
-      padding: theme.spacing(1, 1.2),
-    },
-  },
-  colIdx: {
-    textAlign: 'center',
-    color: theme.palette.text.secondary,
-    fontVariantNumeric: 'tabular-nums',
-  },
-  songCell: {
-    display: 'flex',
-    alignItems: 'center',
-    minWidth: 0,
-    gap: theme.spacing(1.1),
-  },
-  cover: {
-    width: 54,
-    height: 54,
-    borderRadius: 8,
-    background: theme.palette.action.hover,
-    flexShrink: 0,
-    [theme.breakpoints.down('sm')]: {
-      width: 42,
-      height: 42,
-    },
-  },
-  songMain: {
-    minWidth: 0,
     display: 'flex',
     flexDirection: 'column',
-    gap: theme.spacing(0.45),
   },
-  songName: {
-    fontWeight: 600,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  tagRow: {
+  modeSwitchWrap: {
     display: 'flex',
     alignItems: 'center',
-    gap: theme.spacing(0.6),
-    minHeight: 20,
+    justifyContent: 'space-between',
+    paddingLeft: theme.spacing(2),
+    paddingRight: theme.spacing(2),
+    marginBottom: theme.spacing(2),
+    flexShrink: 0,
   },
-  sourceTag: {
-    height: 18,
-    borderRadius: 5,
-    fontSize: '0.66rem',
+  '@keyframes modeTitleFadeIn': {
+    from: {
+      opacity: 0,
+      transform: 'translateY(8px) scale(0.985)',
+      filter: 'blur(2px)',
+    },
+    to: {
+      opacity: 1,
+      transform: 'translateY(0) scale(1)',
+      filter: 'blur(0)',
+    },
+  },
+  modeTitle: {
+    fontSize: '1.25rem',
     fontWeight: 700,
-  },
-  qualityTag: {
-    height: 18,
-    borderRadius: 5,
-    fontSize: '0.66rem',
-    fontWeight: 700,
-  },
-  textCell: {
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  durationCell: {
-    textAlign: 'right',
-    fontVariantNumeric: 'tabular-nums',
-    color: theme.palette.text.secondary,
-  },
-  actionCell: {
+    color: theme.palette.text.primary,
+    height: 36,
     display: 'flex',
-    justifyContent: 'flex-end',
+    alignItems: 'center',
+    willChange: 'opacity, transform, filter',
+    animation: '$modeTitleFadeIn 420ms cubic-bezier(0.22, 1, 0.36, 1)',
   },
-  downloadBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
+  modeSwitch: {
+    position: 'relative',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: 136,
+    height: 36,
+    padding: 0,
+    borderRadius: 18,
+    border: '1px solid rgba(25, 118, 210, 0.22)',
+    backgroundColor: 'rgba(25, 118, 210, 0.08)',
     color: theme.palette.text.secondary,
-    border: `1px solid ${theme.palette.divider}`,
-    backgroundColor: 'transparent',
+    textTransform: 'none',
+    boxShadow: 'none',
+    cursor: 'pointer',
+    overflow: 'hidden',
+    transition:
+      'background-color 0.2s ease, border-color 0.2s ease, transform 0.2s ease',
     '&:hover': {
-      backgroundColor: theme.palette.action.hover,
+      backgroundColor: 'rgba(25, 118, 210, 0.12)',
+      borderColor: 'rgba(25, 118, 210, 0.32)',
+      boxShadow: 'none',
+    },
+    '&:active': {
+      transform: 'scale(0.99)',
     },
   },
-  mobileHidden: {
-    [theme.breakpoints.down('sm')]: {
-      display: 'none',
-    },
+  modeSwitchThumb: {
+    position: 'absolute',
+    top: 2,
+    left: 2,
+    width: 66,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: theme.palette.primary.main,
+    boxShadow: 'none',
+    transition: 'transform 0.24s cubic-bezier(0.2, 0.8, 0.2, 1)',
   },
-  resultStatus: {
+  modeSwitchThumbPlaylist: {
+    transform: 'translateX(66px)',
+  },
+  modeSwitchText: {
+    position: 'relative',
+    zIndex: 1,
+    flex: 1,
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: theme.spacing(1),
-    marginBottom: theme.spacing(1.2),
+    justifyContent: 'center',
+    textAlign: 'center',
+    fontSize: '0.82rem',
+    fontWeight: 700,
+    lineHeight: '1',
+    pointerEvents: 'none',
+    transition: 'color 0.2s ease',
   },
-  paginationRow: {
-    marginTop: theme.spacing(1.5),
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: theme.spacing(1),
-    flexWrap: 'wrap',
-  },
-  paginationInfo: {
-    color: theme.palette.text.secondary,
-    fontSize: '0.86rem',
-  },
-  paginationControls: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: theme.spacing(1),
-    flexWrap: 'wrap',
-  },
-  jumpInput: {
-    width: 88,
-    '& .MuiOutlinedInput-input': {
-      paddingTop: 8,
-      paddingBottom: 8,
-      textAlign: 'center',
-    },
+  modeSwitchTextActive: {
+    color: '#111',
   },
   downloadDialogPaper: {
     borderRadius: 18,
@@ -350,30 +154,8 @@ const useStyles = makeStyles((theme) => ({
   },
 }))
 
-const QUALITY_META = {
-  master: { label: 'Master', bg: '#f0e4ff', color: '#6d35b2' },
-  flac24bit: { label: 'Hi-Res', bg: '#fff2cc', color: '#8d5f00' },
-  ape: { label: 'APE', bg: '#ffe4cc', color: '#9a4d00' },
-  flac: { label: 'FLAC', bg: '#dff6e7', color: '#1f7a53' },
-  '320k': { label: '320k', bg: '#dce8ff', color: '#2c4ca3' },
-  '128k': { label: '128k', bg: '#ececec', color: '#555' },
-}
-
-const QUALITY_ORDER = ['master', 'flac24bit', 'ape', 'flac', '320k', '128k']
-
-const getSourceBadge = (src) =>
-  SOURCE_BADGE[src] || { bg: '#e7e7e7', color: '#666', name: src || '未知' }
-
-// Truncate a source name to a maximum of 5 visual characters, appending '…'
-// if the original was longer. Used by the download-option buttons to show
-// which source is currently resolving/downloading without overflowing.
-const truncateSourceName = (name, max = 5) => {
-  if (!name) return ''
-  if (name.length <= max) return name
-  return `${name.slice(0, max)}…`
-}
-
 const getQualityKeys = (item) => {
+  const QUALITY_ORDER = ['master', 'flac24bit', 'ape', 'flac', '320k', '128k']
   const raw =
     item?.qualitys || item?._qualitys || item?.types || item?._types || {}
   const explicit = item?.quality || item?.type
@@ -389,83 +171,72 @@ const getQualityKeys = (item) => {
   return keys
 }
 
-const formatDuration = (value) => {
-  const num = Number(value)
-  if (!Number.isFinite(num) || num <= 0) return '--:--'
-  const totalSeconds = Math.floor(num >= 1000 ? num / 1000 : num)
-  const mm = String(Math.floor(totalSeconds / 60)).padStart(2, '0')
-  const ss = String(totalSeconds % 60).padStart(2, '0')
-  return `${mm}:${ss}`
-}
+const getQualitySizeMap = (item) => {
+  const getRawQualitySizeMap = (item) => {
+    const rawTypes =
+      item?.types ||
+      item?._types ||
+      item?.qualitys ||
+      item?._qualitys ||
+      (item?.meta &&
+        (item.meta.types ||
+          item.meta._types ||
+          item.meta.qualitys ||
+          item.meta._qualitys)) ||
+      {}
+    const result = {}
 
-const formatFileSize = (input) => {
-  if (typeof input === 'string') {
-    const text = input.trim()
-    if (!text) return '大小未知'
-    // Already a formatted string like "12.34 MB" or "12.34M"
-    if (/^\d+(\.\d+)?\s*(B|KB|MB|GB|TB)$/i.test(text)) return text.toUpperCase()
-    // KW N_MINFO size field: "12.34M" without space
-    if (/^(\d+\.?\d*)([KMGT])$/i.test(text)) {
-      const m = text.match(/^(\d+\.?\d*)([KMGT])$/i)
-      const num = parseFloat(m[1])
-      const unit = m[2].toUpperCase()
-      const map = { K: 'KB', M: 'MB', G: 'GB', T: 'TB' }
-      return `${num.toFixed(2)} ${map[unit] || unit}`
+    if (Array.isArray(rawTypes)) {
+      rawTypes.forEach((entry) => {
+        const type = entry?.type
+        if (!type) return
+        if (entry?.size != null && entry.size !== '') result[type] = entry.size
+      })
+      return result
     }
-    const asNumber = Number(text)
-    if (Number.isFinite(asNumber) && asNumber > 0) {
-      input = asNumber
-    } else {
-      return text
+
+    if (rawTypes && typeof rawTypes === 'object') {
+      Object.entries(rawTypes).forEach(([key, value]) => {
+        if (value && typeof value === 'object') {
+          if (value.size != null && value.size !== '') result[key] = value.size
+          return
+        }
+        if (typeof value === 'number' && value > 0) result[key] = value
+        if (typeof value === 'string' && value.trim()) result[key] = value.trim()
+      })
     }
-  }
 
-  const num = Number(input)
-  if (!Number.isFinite(num) || num <= 0) return '大小未知'
-  if (num < 1024) return `${num} B`
-  if (num < 1024 * 1024) return `${(num / 1024).toFixed(1)} KB`
-  if (num < 1024 * 1024 * 1024) return `${(num / 1024 / 1024).toFixed(1)} MB`
-  return `${(num / 1024 / 1024 / 1024).toFixed(2)} GB`
-}
-
-const getRawQualitySizeMap = (item) => {
-  const rawTypes =
-    item?.types ||
-    item?._types ||
-    item?.qualitys ||
-    item?._qualitys ||
-    (item?.meta &&
-      (item.meta.types ||
-        item.meta._types ||
-        item.meta.qualitys ||
-        item.meta._qualitys)) ||
-    {}
-  const result = {}
-
-  if (Array.isArray(rawTypes)) {
-    rawTypes.forEach((entry) => {
-      const type = entry?.type
-      if (!type) return
-      if (entry?.size != null && entry.size !== '') result[type] = entry.size
-    })
     return result
   }
 
-  if (rawTypes && typeof rawTypes === 'object') {
-    Object.entries(rawTypes).forEach(([key, value]) => {
-      if (value && typeof value === 'object') {
-        if (value.size != null && value.size !== '') result[key] = value.size
-        return
+  const formatFileSize = (input) => {
+    if (typeof input === 'string') {
+      const text = input.trim()
+      if (!text) return '大小未知'
+      if (/^\d+(\.\d+)?\s*(B|KB|MB|GB|TB)$/i.test(text)) return text.toUpperCase()
+      if (/^(\d+\.?\d*)([KMGT])$/i.test(text)) {
+        const m = text.match(/^(\d+\.?\d*)([KMGT])$/i)
+        const num = parseFloat(m[1])
+        const unit = m[2].toUpperCase()
+        const map = { K: 'KB', M: 'MB', G: 'GB', T: 'TB' }
+        return `${num.toFixed(2)} ${map[unit] || unit}`
       }
-      if (typeof value === 'number' && value > 0) result[key] = value
-      if (typeof value === 'string' && value.trim()) result[key] = value.trim()
-    })
+      const asNumber = Number(text)
+      if (Number.isFinite(asNumber) && asNumber > 0) {
+        input = asNumber
+      } else {
+        return text
+      }
+    }
+
+    const num = Number(input)
+    if (!Number.isFinite(num) || num <= 0) return '大小未知'
+    if (num < 1024) return `${num} B`
+    if (num < 1024 * 1024) return `${(num / 1024).toFixed(1)} KB`
+    if (num < 1024 * 1024 * 1024) return `${(num / 1024 / 1024).toFixed(1)} MB`
+    return `${(num / 1024 / 1024 / 1024).toFixed(2)} GB`
   }
 
-  return result
-}
-
-const getQualitySizeMap = (item) => {
   const meta = item?.meta || {}
   const source = item?.source || ''
   const result = getRawQualitySizeMap(item)
@@ -479,7 +250,6 @@ const getQualitySizeMap = (item) => {
   }
 
   if (source === 'wy') {
-    // NetEase quality objects: hr(24bit), sq(flac), h(320k), m(192k), l(128k) each have .size in bytes
     assignIfMissing('flac24bit', meta.hr?.size)
     assignIfMissing('flac', meta.sq?.size)
     assignIfMissing('320k', meta.h?.size)
@@ -506,14 +276,12 @@ const getQualitySizeMap = (item) => {
   }
 
   if (source === 'mg') {
-    // MG audioFormats use asize/isize (bytes); matches lxserver-main mg/musicSearch.js
     const rates =
       meta.audioFormats || meta.newRateFormats || meta.rateFormats || []
     rates.forEach((rate) => {
       const t = String(
         (rate && (rate.formatType || rate.qualityType || rate.type)) || '',
       ).toUpperCase()
-      // asize = Android size, isize = iOS size (bytes); fall back to size/fileSize/androidSize
       const rawSize =
         rate?.asize ??
         rate?.isize ??
@@ -535,9 +303,6 @@ const getQualitySizeMap = (item) => {
   }
 
   if (source === 'kw') {
-    // KW N_MINFO format: "level:xxx,bitrate:4000,format:flac,size:12.34M;level:xxx,bitrate:2000,..."
-    // Matches lxserver-main kw/musicSearch.js: /level:(\w+),bitrate:(\d+),format:(\w+),size:([\w.]+)/
-    // size is already a formatted string ("12.34M"), NOT bytes, so bypass assignIfMissing (which requires Number)
     const nminfo = String(meta.N_MINFO || meta.n_minfo || '')
     if (nminfo) {
       const setKWSize = (key, size) => {
@@ -567,6 +332,33 @@ const getQualitySizeMap = (item) => {
 const getQualityOptions = (item) => {
   const keys = getQualityKeys(item)
   const sizeMap = getQualitySizeMap(item)
+  const formatFileSize = (input) => {
+    if (typeof input === 'string') {
+      const text = input.trim()
+      if (!text) return '大小未知'
+      if (/^\d+(\.\d+)?\s*(B|KB|MB|GB|TB)$/i.test(text)) return text.toUpperCase()
+      if (/^(\d+\.?\d*)([KMGT])$/i.test(text)) {
+        const m = text.match(/^(\d+\.?\d*)([KMGT])$/i)
+        const num = parseFloat(m[1])
+        const unit = m[2].toUpperCase()
+        const map = { K: 'KB', M: 'MB', G: 'GB', T: 'TB' }
+        return `${num.toFixed(2)} ${map[unit] || unit}`
+      }
+      const asNumber = Number(text)
+      if (Number.isFinite(asNumber) && asNumber > 0) {
+        input = asNumber
+      } else {
+        return text
+      }
+    }
+
+    const num = Number(input)
+    if (!Number.isFinite(num) || num <= 0) return '大小未知'
+    if (num < 1024) return `${num} B`
+    if (num < 1024 * 1024) return `${(num / 1024).toFixed(1)} KB`
+    if (num < 1024 * 1024 * 1024) return `${(num / 1024 / 1024).toFixed(1)} MB`
+    return `${(num / 1024 / 1024 / 1024).toFixed(2)} GB`
+  }
   return keys.map((key) => {
     const label = QUALITY_META[key]?.label || key
     const size = sizeMap[key]
@@ -577,6 +369,12 @@ const getQualityOptions = (item) => {
       sizeText: formatFileSize(size),
     }
   })
+}
+
+const truncateSourceName = (name, max = 5) => {
+  if (!name) return ''
+  if (name.length <= max) return name
+  return `${name.slice(0, max)}…`
 }
 
 const parseDownloadFileName = (contentDisposition) => {
@@ -595,24 +393,10 @@ const parseDownloadFileName = (contentDisposition) => {
 
 const OnlineSearch = () => {
   const classes = useStyles()
-  const translate = useTranslate()
   const notify = useNotify()
 
-  const [query, setQuery] = useState('')
-  const [type, setType] = useState('song')
-  const [source, setSource] = useState('wy')
-  const [hotList, setHotList] = useState([])
-  const [hotLoading, setHotLoading] = useState(false)
-  const [hotDebug, setHotDebug] = useState('')
-  const [searchLoading, setSearchLoading] = useState(false)
-  const [searchError, setSearchError] = useState('')
-  const [results, setResults] = useState([])
-  const [lastKeyword, setLastKeyword] = useState('')
-  const [hasSearched, setHasSearched] = useState(false)
-  const [page, setPage] = useState(1)
-  const limit = 20
-  const [total, setTotal] = useState(0)
-  const [jumpPageInput, setJumpPageInput] = useState('1')
+  const [viewMode, setViewMode] = useState(VIEW_MODES.song)
+  const [hasOpenedPlaylistView, setHasOpenedPlaylistView] = useState(false)
   const [qualityDialogOpen, setQualityDialogOpen] = useState(false)
   const [downloadDialogOpen, setDownloadDialogOpen] = useState(false)
   const [selectedItem, setSelectedItem] = useState(null)
@@ -621,144 +405,22 @@ const OnlineSearch = () => {
   const [browserDownloadLoading, setBrowserDownloadLoading] = useState(false)
   const [browserDownloadProgress, setBrowserDownloadProgress] = useState(0)
   const [browserDownloadStatus, setBrowserDownloadStatus] = useState('idle')
-  // Human-readable source name reported by the backend once the resolve
-  // script has identified itself (e.g. "ikun[赞助][永久]"). For built-in
-  // sources (wy/tx/kg/kw/mg) this stays empty and we fall back to the
-  // selectedItem.source id. Reset whenever a new download kicks off.
   const [browserDownloadSourceName, setBrowserDownloadSourceName] = useState('')
   const [serverDownloadLoading, setServerDownloadLoading] = useState(false)
   const [serverDownloadStatus, setServerDownloadStatus] = useState('idle')
-
-  const loadHotSearch = useCallback((src, forceRefresh = false) => {
-    setHotLoading(true)
-    setHotList([])
-    setHotDebug('')
-    const url = forceRefresh
-      ? `/api/online/search/hot?source=${src}&refresh=true`
-      : `/api/online/search/hot?source=${src}`
-    httpClient(url)
-      .then(({ json }) => {
-        // console.log(`[HOT SEARCH DEBUG ${src}]`, json)
-        if (json?.debug) {
-          // console.log(`  DEBUG Info: ${json.debug}`)
-          setHotDebug(json.debug)
-        }
-        setHotList(Array.isArray(json?.list) ? json.list : [])
-      })
-      .catch((err) => {
-        // console.error(`[HOT SEARCH ERROR ${src}]`, err)
-        setHotList([])
-      })
-      .finally(() => {
-        setHotLoading(false)
-      })
-  }, [])
+  const [playlistSyncTasks, setPlaylistSyncTasks] = useState([])
 
   useEffect(() => {
-    loadHotSearch(source)
-  }, [source, loadHotSearch])
-
-  useEffect(() => {
-    if (!String(query || '').trim()) {
-      setHasSearched(false)
-      setResults([])
-      setLastKeyword('')
-      setSearchError('')
-      setPage(1)
-      setTotal(0)
-      setJumpPageInput('1')
+    if (viewMode === VIEW_MODES.playlist) {
+      setHasOpenedPlaylistView(true)
     }
-  }, [query])
+  }, [viewMode])
 
-  const runSearch = useCallback(
-    (rawKeyword, targetPage = 1) => {
-      const keyword = String(rawKeyword || '').trim()
-      if (!keyword) {
-        setHasSearched(false)
-        setResults([])
-        setLastKeyword('')
-        setSearchError('')
-        setPage(1)
-        setTotal(0)
-        setJumpPageInput('1')
-        return
-      }
-
-      const normalizedPage = Math.max(1, Number(targetPage) || 1)
-      setHasSearched(true)
-      setSearchLoading(true)
-      setSearchError('')
-      setLastKeyword(keyword)
-      setPage(normalizedPage)
-      setJumpPageInput(String(normalizedPage))
-
-      httpClient(
-        `/api/online/search?source=${encodeURIComponent(source)}&type=${encodeURIComponent(type)}&name=${encodeURIComponent(keyword)}&limit=${encodeURIComponent(limit)}&page=${encodeURIComponent(normalizedPage)}`,
-      )
-        .then(({ json }) => {
-          const list = Array.isArray(json?.list) ? json.list : []
-          const totalCount = Number(json?.total)
-          setResults(list)
-          setTotal(
-            Number.isFinite(totalCount) && totalCount >= 0
-              ? totalCount
-              : list.length,
-          )
-          if (Number(json?.page) > 0) {
-            setPage(Number(json.page))
-            setJumpPageInput(String(json.page))
-          }
-          if (json?.error) {
-            setSearchError(String(json.error))
-          }
-        })
-        .catch(() => {
-          setResults([])
-          setTotal(0)
-          setSearchError('搜索失败，请稍后重试')
-        })
-        .finally(() => {
-          setSearchLoading(false)
-        })
-    },
-    [source, type, limit],
-  )
-
-  const handleSearch = useCallback(() => {
-    runSearch(query, 1)
-  }, [query, runSearch])
-
-  const handleKeyDown = useCallback(
-    (e) => {
-      if (e.key === 'Enter') handleSearch()
-    },
-    [handleSearch],
-  )
-
-  const handleHotItemClick = useCallback(
-    (word) => {
-      setQuery(word)
-      runSearch(word, 1)
-    },
-    [runSearch],
-  )
-
-  const totalPages = Math.max(1, Math.ceil((Number(total) || 0) / limit))
-
-  const handlePrevPage = useCallback(() => {
-    if (searchLoading || page <= 1) return
-    runSearch(lastKeyword || query, page - 1)
-  }, [searchLoading, page, runSearch, lastKeyword, query])
-
-  const handleNextPage = useCallback(() => {
-    if (searchLoading || page >= totalPages) return
-    runSearch(lastKeyword || query, page + 1)
-  }, [searchLoading, page, totalPages, runSearch, lastKeyword, query])
-
-  const handleJumpPage = useCallback(() => {
-    const target = Math.min(totalPages, Math.max(1, Number(jumpPageInput) || 1))
-    runSearch(lastKeyword || query, target)
-  }, [jumpPageInput, runSearch, lastKeyword, query, totalPages])
+  const handleToggleMode = useCallback(() => {
+    setViewMode((current) =>
+      current === VIEW_MODES.song ? VIEW_MODES.playlist : VIEW_MODES.song,
+    )
+  }, [])
 
   const handleOpenDownloadDialog = useCallback((item) => {
     setSelectedItem(item)
@@ -787,8 +449,292 @@ const OnlineSearch = () => {
     setBrowserDownloadSourceName('')
     setServerDownloadStatus('idle')
   }, [])
+
   const handleCloseDownloadErrorDialog = useCallback(() => {
     setDownloadErrorOpen(false)
+  }, [])
+
+  const handleCreatePlaylistSyncTask = useCallback(
+    async (syncTask, detailSongs) => {
+      if (!syncTask) return
+
+      const taskId = syncTask.id
+
+      console.log('[playlist-sync] receive sync task', {
+        taskId,
+        syncTask,
+        detailSongsCount: Array.isArray(detailSongs) ? detailSongs.length : 0,
+      })
+
+      // Add sync task to local state
+      setPlaylistSyncTasks((prev) => [...prev, syncTask])
+      console.log('[playlist-sync] task appended to local state', {
+        taskId,
+        totalTasks: playlistSyncTasks.length + 1,
+        status: syncTask.status,
+      })
+
+      let navidromPlaylistId = syncTask.navidromPlaylistId
+
+      // Ensure playlist exists before starting sync. This keeps task visible
+      // in the UI even if playlist creation fails.
+      if (!navidromPlaylistId) {
+        try {
+          console.log('[playlist-sync] creating navidrome playlist', {
+            name: syncTask.title || '未命名歌单',
+            comment: syncTask.playlistComment || '',
+            playlistId: syncTask.playlistId,
+            source: syncTask.source,
+            selectedQuality: syncTask.selectedQuality,
+            songsCount: Array.isArray(detailSongs) ? detailSongs.length : 0,
+          })
+
+          const createPlaylistUrl = subsonic.url('createPlaylist', null, {
+            name: syncTask.title || '未命名歌单',
+          })
+          console.log('[playlist-sync] create playlist request url', {
+            createPlaylistUrl,
+          })
+
+          const createPlaylistRes = await httpClient(createPlaylistUrl, {
+            method: 'GET',
+          })
+          console.log('[playlist-sync] create playlist response', {
+            status: createPlaylistRes?.status,
+            ok: createPlaylistRes?.status >= 200 && createPlaylistRes?.status < 300,
+            response: createPlaylistRes,
+          })
+
+          navidromPlaylistId =
+            createPlaylistRes?.json?.id ||
+            createPlaylistRes?.json?.playlist?.id ||
+            createPlaylistRes?.json?.['subsonic-response']?.playlist?.id
+          console.log('[playlist-sync] create playlist response json', {
+            json: createPlaylistRes?.json,
+            navidromPlaylistId,
+          })
+          if (!navidromPlaylistId) {
+            console.error('[playlist-sync] playlist id missing', {
+              responseJson: createPlaylistRes?.json,
+              responseStatus: createPlaylistRes?.status,
+              syncTask,
+            })
+            throw new Error('playlist_id_missing')
+          }
+
+          const playlistComment = (syncTask.playlistComment || '').trim()
+          if (playlistComment) {
+            try {
+              const updatePlaylistUrl = subsonic.url('updatePlaylist', null, {
+                playlistId: navidromPlaylistId,
+                comment: playlistComment,
+              })
+              console.log('[playlist-sync] update playlist comment request url', {
+                updatePlaylistUrl,
+                navidromPlaylistId,
+                commentLength: playlistComment.length,
+              })
+
+              const updatePlaylistRes = await httpClient(updatePlaylistUrl, {
+                method: 'GET',
+              })
+              console.log('[playlist-sync] update playlist comment response', {
+                status: updatePlaylistRes?.status,
+                ok: updatePlaylistRes?.status >= 200 && updatePlaylistRes?.status < 300,
+                navidromPlaylistId,
+              })
+            } catch (commentError) {
+              console.warn('[playlist-sync] failed to update playlist comment', {
+                error: commentError,
+                message: commentError?.message,
+                navidromPlaylistId,
+              })
+            }
+          }
+
+          const playlistCover = (syncTask.cover || '').trim()
+          if (playlistCover) {
+            try {
+              const fetchCoverRes = await httpClient(`/api/playlist/${navidromPlaylistId}/image/fetch`, {
+                method: 'POST',
+                body: JSON.stringify({ imageUrl: playlistCover }),
+              })
+              console.log('[playlist-sync] fetch playlist cover response', {
+                status: fetchCoverRes?.status,
+                ok: fetchCoverRes?.status >= 200 && fetchCoverRes?.status < 300,
+                navidromPlaylistId,
+                playlistCover,
+              })
+            } catch (coverError) {
+              console.warn('[playlist-sync] failed to fetch playlist cover', {
+                error: coverError,
+                message: coverError?.message,
+                navidromPlaylistId,
+                playlistCover,
+              })
+            }
+          }
+
+          setPlaylistSyncTasks((prev) =>
+            prev.map((t) =>
+              t.id === taskId
+                ? {
+                  ...t,
+                  navidromPlaylistId,
+                  currentSongTitle: '准备中',
+                }
+                : t,
+            ),
+          )
+          console.log('[playlist-sync] local sync task updated with playlist id', {
+            taskId,
+            navidromPlaylistId,
+          })
+        } catch (error) {
+          console.error('[playlist-sync] failed to create navidrome playlist', {
+            error,
+            message: error?.message,
+            stack: error?.stack,
+            syncTask,
+            taskId,
+            songsCount: Array.isArray(detailSongs) ? detailSongs.length : 0,
+          })
+          setPlaylistSyncTasks((prev) =>
+            prev.map((t) =>
+              t.id === taskId
+                ? {
+                  ...t,
+                  status: 'sync-error',
+                  currentSongTitle: '创建歌单失败',
+                }
+                : t,
+            ),
+          )
+          console.error('Failed to create Navidrome playlist for sync:', error)
+          return
+        }
+      }
+
+      // Notify backend to start the sync
+      try {
+        console.log('[playlist-sync] starting sync', {
+          taskId,
+          navidromPlaylistId,
+          preferredQuality: syncTask.selectedQuality || '',
+          songsCount: Array.isArray(detailSongs) ? detailSongs.length : 0,
+          firstSong: detailSongs?.[0] || null,
+        })
+
+        const startRes = await httpClient('/api/online/playlist/sync/start', {
+          method: 'POST',
+          body: JSON.stringify({
+            taskId,
+            navidromPlaylistId,
+            playlistName: syncTask.title || '',
+            playlistCover: syncTask.cover || '',
+            songs: detailSongs,
+            preferredQuality: syncTask.selectedQuality || '',
+          }),
+        })
+        console.log('[playlist-sync] sync start response', {
+          status: startRes?.status,
+          ok: startRes?.status >= 200 && startRes?.status < 300,
+          response: startRes,
+        })
+      } catch (error) {
+        console.error('[playlist-sync] failed to start sync', {
+          error,
+          message: error?.message,
+          stack: error?.stack,
+          taskId,
+          navidromPlaylistId,
+          selectedQuality: syncTask.selectedQuality,
+          songsCount: Array.isArray(detailSongs) ? detailSongs.length : 0,
+        })
+        setPlaylistSyncTasks((prev) =>
+          prev.map((t) =>
+            t.id === taskId
+              ? {
+                ...t,
+                status: 'sync-error',
+                currentSongTitle: '同步启动失败',
+              }
+              : t,
+          ),
+        )
+        console.error('Failed to start playlist sync:', error)
+      }
+    },
+    []
+  )
+
+  // Remove local polling; AppBar now handles centralized polling to avoid duplicate efforts
+
+  // No need to emit; AppBar polls and broadcasts for both download and sync tasks
+
+  useEffect(() => {
+    let mounted = true
+    // Fetch sync tasks once on mount to restore any in-progress tasks
+    httpClient('/api/online/playlist/sync/tasks')
+      .then((response) => {
+        if (!mounted) return
+        const tasks = Array.isArray(response?.json?.tasks)
+          ? response.json.tasks
+          : []
+        if (tasks.length > 0) {
+          setPlaylistSyncTasks(tasks)
+        }
+      })
+      .catch(() => { })
+
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  // Listen for AppBar's sync task updates to avoid duplicate polling
+  useEffect(() => {
+    const handleTaskChanged = (e) => {
+      if (e.detail?.playlistSyncTasks) {
+        setPlaylistSyncTasks(e.detail.playlistSyncTasks)
+      }
+    }
+    window.addEventListener(
+      ONLINE_DOWNLOAD_TASK_CHANGED_EVENT,
+      handleTaskChanged,
+    )
+
+    return () => {
+      window.removeEventListener(
+        ONLINE_DOWNLOAD_TASK_CHANGED_EVENT,
+        handleTaskChanged,
+      )
+    }
+  }, [])
+
+  useEffect(() => {
+    const handlePlaylistSyncTasksCleared = (event) => {
+      const clearedIds = Array.isArray(event?.detail?.ids)
+        ? event.detail.ids
+        : []
+      if (clearedIds.length === 0) return
+
+      setPlaylistSyncTasks((prev) =>
+        prev.filter((task) => !clearedIds.includes(task?.id)),
+      )
+    }
+
+    window.addEventListener(
+      ONLINE_PLAYLIST_SYNC_TASKS_CLEARED_EVENT,
+      handlePlaylistSyncTasksCleared,
+    )
+
+    return () => {
+      window.removeEventListener(
+        ONLINE_PLAYLIST_SYNC_TASKS_CLEARED_EVENT,
+        handlePlaylistSyncTasksCleared,
+      )
+    }
   }, [])
 
   const qualityOptions = selectedItem ? getQualityOptions(selectedItem) : []
@@ -809,11 +755,6 @@ const OnlineSearch = () => {
     setBrowserDownloadStatus('resolving')
     setBrowserDownloadSourceName('')
     try {
-      // Pull the user-configured chip template from settings so the
-      // server can name the downloaded file with the same order
-      // they see in the settings panel. Fetching right before
-      // starting the request means a chip reorder in another tab
-      // is picked up on the next download without a refresh.
       const nameTemplate = await fetchOnlineNameTemplate()
       const startResponse = await fetch(
         baseUrl('/api/online/download/browser/start'),
@@ -891,13 +832,6 @@ const OnlineSearch = () => {
         throw new Error('file_fetch_failed')
       }
 
-      const resolvedUrl = response.headers.get('x-online-resolved-url')
-      const resolvedBy = response.headers.get('x-online-resolver-source')
-      const downloadMode = response.headers.get('x-online-download-mode')
-      // console.log('[OnlineDownload] Resolved URL:', resolvedUrl || '(empty)')
-      // console.log('[OnlineDownload] Resolved By:', resolvedBy || '(unknown)')
-      // console.log('[OnlineDownload] Backend Mode:', downloadMode || '(stream)')
-
       const blob = await response.blob()
       const objectUrl = window.URL.createObjectURL(blob)
       const anchor = document.createElement('a')
@@ -935,10 +869,6 @@ const OnlineSearch = () => {
     setServerDownloadLoading(true)
     setServerDownloadStatus('resolving')
     try {
-      // Persist the chip order alongside the request so the
-      // server can use it when building the file path on disk.
-      // Stored on the task itself, so even a mid-download
-      // settings change doesn't break the in-flight task.
       const nameTemplate = await fetchOnlineNameTemplate()
       const response = await fetch(
         baseUrl('/api/online/download/server/start'),
@@ -972,359 +902,68 @@ const OnlineSearch = () => {
     }
   }, [handleCloseDownloadDialog, notify, selectedItem, selectedQuality])
 
-  const badge = SOURCE_BADGE[source] || {}
-
   return (
     <div className={classes.root}>
       <Title
         title={
-          'Navidrome - ' +
-          translate('menu.onlineSearch', { _: 'Online Search' })
+          'Navidrome - Online Search'
         }
       />
 
-      {/* ── Row 1: search controls ── */}
-      <div className={classes.searchRow}>
-        <TextField
-          className={classes.searchInput}
-          variant="outlined"
-          size="small"
-          placeholder={translate('online.search.placeholder', {
-            _: '搜索歌曲、歌手...',
-          })}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={handleKeyDown}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon color="action" fontSize="small" />
-              </InputAdornment>
-            ),
-          }}
-        />
+      {/* ── Mode switch bar with title ── */}
+      <div className={classes.modeSwitchWrap}>
+        <Typography key={viewMode} className={classes.modeTitle}>
+          {viewMode === VIEW_MODES.song ? '在线歌曲' : '在线歌单'}
+        </Typography>
         <Button
-          variant="contained"
-          color="primary"
-          className={classes.searchBtn}
-          onClick={handleSearch}
+          className={classes.modeSwitch}
+          onClick={handleToggleMode}
+          role="switch"
+          aria-checked={viewMode === VIEW_MODES.playlist}
         >
-          {translate('online.search.button', { _: 'Search' })}
+          <span
+            className={`${classes.modeSwitchThumb} ${viewMode === VIEW_MODES.playlist
+              ? classes.modeSwitchThumbPlaylist
+              : ''
+              }`}
+          />
+          <span
+            className={`${classes.modeSwitchText} ${viewMode === VIEW_MODES.song ? classes.modeSwitchTextActive : ''
+              }`}
+          >
+            歌曲
+          </span>
+          <span
+            className={`${classes.modeSwitchText} ${viewMode === VIEW_MODES.playlist
+              ? classes.modeSwitchTextActive
+              : ''
+              }`}
+          >
+            歌单
+          </span>
         </Button>
-        <Select
-          className={`${classes.typeSelect} ${classes.selectControl}`}
-          variant="outlined"
-          value={type}
-          onChange={(e) => setType(e.target.value)}
-        >
-          {TYPES.map((t) => (
-            <MenuItem key={t.key} value={t.key}>
-              {t.label}
-            </MenuItem>
-          ))}
-        </Select>
-        <Select
-          className={`${classes.sourceSelect} ${classes.selectControl}`}
-          variant="outlined"
-          value={source}
-          onChange={(e) => setSource(e.target.value)}
-        >
-          {SOURCES.map((s) => (
-            <MenuItem key={s.key} value={s.key}>
-              {s.label}
-            </MenuItem>
-          ))}
-        </Select>
       </div>
 
-      {/* ── Row 2: hot search (shown only before search / when input is empty) ── */}
-      {!hasSearched && (
-        <Card className={classes.hotCard} variant="outlined">
-          <CardContent>
-            <div className={classes.hotHeader}>
-              <Typography className={classes.hotTitle}>
-                {translate('online.search.hotSearch', {
-                  _: 'Trending Searches',
-                })}
-              </Typography>
-              <Chip
-                size="small"
-                label={badge.name}
-                style={{
-                  backgroundColor: badge.bg,
-                  color: badge.color,
-                  fontWeight: 600,
-                  fontSize: '0.7rem',
-                  height: 20,
-                }}
-              />
-            </div>
+      {/* ── Song Search Component ── */}
+      <div style={{ display: viewMode === VIEW_MODES.song ? 'block' : 'none' }}>
+        <OnlineSongSearch
+          limit={20}
+          onOpenDownloadDialog={handleOpenDownloadDialog}
+        />
+      </div>
 
-            {hotLoading ? (
-              <div className={classes.loadingBox}>
-                <CircularProgress size={32} />
-              </div>
-            ) : hotList.length === 0 ? (
-              <div className={classes.emptyBox}>
-                <Typography variant="body2">
-                  {translate('online.search.hotEmpty', {
-                    _: 'No trending data',
-                  })}
-                </Typography>
-              </div>
-            ) : (
-              <Grid container className={classes.hotGrid}>
-                {hotList.map((word, idx) => {
-                  const rankStyle = RANK_COLORS[idx] || null
-                  return (
-                    <Grid item xs={12} sm={6} md={4} lg={3} key={idx}>
-                      <div
-                        className={classes.hotItem}
-                        onClick={() => handleHotItemClick(word)}
-                      >
-                        <Box
-                          className={classes.rankBadge}
-                          style={
-                            rankStyle
-                              ? {
-                                  backgroundColor: rankStyle.bg,
-                                  color: rankStyle.color,
-                                }
-                              : {}
-                          }
-                        >
-                          {idx + 1}
-                        </Box>
-                        <Typography className={classes.hotWord} title={word}>
-                          {word}
-                        </Typography>
-                        <SearchIcon
-                          className={classes.hotSearchHint}
-                          fontSize="small"
-                        />
-                      </div>
-                    </Grid>
-                  )
-                })}
-              </Grid>
-            )}
-
-            <div className={classes.refreshRow}>
-              <Button
-                className={classes.refreshBtn}
-                startIcon={<RefreshIcon />}
-                onClick={() => loadHotSearch(source, true)}
-                disabled={hotLoading}
-                size="small"
-              >
-                {translate('online.search.refreshHot', {
-                  _: 'Refresh Trending',
-                })}
-              </Button>
-            </div>
-            {hotDebug && (
-              <div
-                style={{
-                  marginTop: 12,
-                  padding: 8,
-                  backgroundColor: '#f5f5f5',
-                  borderRadius: 4,
-                }}
-              >
-                <Typography
-                  variant="caption"
-                  style={{
-                    fontFamily: 'monospace',
-                    fontSize: '0.7rem',
-                    color: '#666',
-                  }}
-                >
-                  Debug: {hotDebug}
-                </Typography>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      {/* ── Playlist Search Component ── */}
+      {hasOpenedPlaylistView && (
+        <div style={{ display: viewMode === VIEW_MODES.playlist ? 'block' : 'none' }}>
+          <OnlinePlaylistSearch
+            active={viewMode === VIEW_MODES.playlist}
+            onOpenDownloadDialog={handleOpenDownloadDialog}
+            onCreatePlaylistSyncTask={handleCreatePlaylistSyncTask}
+          />
+        </div>
       )}
 
-      {hasSearched && (
-        <Card className={classes.resultCard} variant="outlined">
-          <CardContent>
-            <div className={classes.resultStatus}>
-              <Typography variant="subtitle2">
-                {lastKeyword
-                  ? `${lastKeyword} · ${results.length} 条结果`
-                  : '搜索结果'}
-              </Typography>
-              {searchLoading && <CircularProgress size={18} />}
-            </div>
-
-            <div className={classes.tableHeader}>
-              <span className={classes.colIdx}>#</span>
-              <span>歌曲标题</span>
-              <span className={classes.mobileHidden}>歌手</span>
-              <span className={classes.mobileHidden}>专辑</span>
-              <span className={classes.mobileHidden}>时长</span>
-              <span className={classes.durationCell}>操作</span>
-            </div>
-
-            {searchLoading ? (
-              <div className={classes.loadingBox}>
-                <CircularProgress size={32} />
-              </div>
-            ) : searchError ? (
-              <div className={classes.emptyBox}>
-                <Typography variant="body2">{searchError}</Typography>
-              </div>
-            ) : results.length === 0 ? (
-              <div className={classes.emptyBox}>
-                <Typography variant="body2">
-                  {lastKeyword ? '未找到匹配结果' : '输入关键词开始搜索'}
-                </Typography>
-              </div>
-            ) : (
-              <div>
-                {results.map((item, idx) => {
-                  const sourceInfo = getSourceBadge(item.source || source)
-                  const qualityKeys = getQualityKeys(item)
-                  return (
-                    <div
-                      key={`${item.id || item.name || 'row'}-${idx}`}
-                      className={classes.resultRow}
-                    >
-                      <span className={classes.colIdx}>
-                        {(page - 1) * limit + idx + 1}
-                      </span>
-
-                      <div className={classes.songCell}>
-                        <Avatar
-                          variant="rounded"
-                          src={item.img || undefined}
-                          className={classes.cover}
-                        />
-                        <div className={classes.songMain}>
-                          <Typography
-                            className={classes.songName}
-                            title={item.name || ''}
-                          >
-                            {item.name || '未知标题'}
-                          </Typography>
-                          <div className={classes.tagRow}>
-                            <Chip
-                              size="small"
-                              label={sourceInfo.name}
-                              className={classes.sourceTag}
-                              style={{
-                                backgroundColor: sourceInfo.bg,
-                                color: sourceInfo.color,
-                              }}
-                            />
-                            {qualityKeys.map((qualityKey) => {
-                              const qualityMeta = QUALITY_META[qualityKey] || {
-                                label: qualityKey,
-                                bg: '#ececec',
-                                color: '#555',
-                              }
-                              return (
-                                <Chip
-                                  size="small"
-                                  key={`${item.id || item.name || idx}-${qualityKey}`}
-                                  label={qualityMeta.label}
-                                  className={classes.qualityTag}
-                                  style={{
-                                    backgroundColor: qualityMeta.bg,
-                                    color: qualityMeta.color,
-                                  }}
-                                />
-                              )
-                            })}
-                          </div>
-                        </div>
-                      </div>
-
-                      <Typography
-                        className={`${classes.textCell} ${classes.mobileHidden}`}
-                        title={item.singer || ''}
-                      >
-                        {item.singer || '--'}
-                      </Typography>
-                      <Typography
-                        className={`${classes.textCell} ${classes.mobileHidden}`}
-                        title={item.albumName || ''}
-                      >
-                        {item.albumName || '--'}
-                      </Typography>
-                      <Typography
-                        className={`${classes.durationCell} ${classes.mobileHidden}`}
-                      >
-                        {formatDuration(item.duration || item.interval)}
-                      </Typography>
-                      <div className={classes.actionCell}>
-                        <IconButton
-                          size="small"
-                          className={classes.downloadBtn}
-                          onClick={() => handleOpenDownloadDialog(item)}
-                          aria-label="下载"
-                          title="下载"
-                        >
-                          <GetAppIcon fontSize="small" />
-                        </IconButton>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-
-            <div className={classes.paginationRow}>
-              <Typography className={classes.paginationInfo}>
-                {`共 ${total} 条 · 第 ${page} / ${totalPages} 页`}
-              </Typography>
-              <div className={classes.paginationControls}>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  onClick={handlePrevPage}
-                  disabled={searchLoading || page <= 1}
-                >
-                  上一页
-                </Button>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  onClick={handleNextPage}
-                  disabled={searchLoading || page >= totalPages}
-                >
-                  下一页
-                </Button>
-                <TextField
-                  value={jumpPageInput}
-                  onChange={(e) =>
-                    setJumpPageInput(e.target.value.replace(/[^0-9]/g, ''))
-                  }
-                  variant="outlined"
-                  size="small"
-                  className={classes.jumpInput}
-                  placeholder="页码"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleJumpPage()
-                  }}
-                />
-                <Button
-                  size="small"
-                  variant="contained"
-                  color="primary"
-                  onClick={handleJumpPage}
-                  disabled={searchLoading}
-                >
-                  跳转
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
+      {/* ── Download Dialogs ── */}
       <Dialog
         open={qualityDialogOpen}
         onClose={handleCloseQualityDialog}
@@ -1392,9 +1031,6 @@ const OnlineSearch = () => {
               }
             >
               {(() => {
-                // Prefer the resolver's own display name (e.g. "ikun[赞助]…")
-                // when the backend has reported it; otherwise fall back to
-                // the source code selected in the search filter ("wy"/"kg"/…).
                 const displayName =
                   browserDownloadSourceName || selectedItem?.source || ''
                 const srcName = truncateSourceName(displayName)
@@ -1421,12 +1057,6 @@ const OnlineSearch = () => {
               }
             >
               {(() => {
-                // Server-mode runs resolveOnlineDownloadURL synchronously
-                // before returning a taskId, so the source name isn't
-                // streamed via the progress endpoint. Show the user-selected
-                // source id ("wy"/"kg"/…) up front; once the SSE stream in
-                // the global download panel reports the task, the name
-                // there is already populated by the backend.
                 const srcName = truncateSourceName(selectedItem?.source || '')
                 if (!serverDownloadLoading) return '服务器下载'
                 if (serverDownloadStatus === 'resolving')

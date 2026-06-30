@@ -308,5 +308,12 @@ func (m *MockLibraryRepo) ValidateLibraryAccess(ctx context.Context, userID stri
 	return nil
 }
 
+func (m *MockLibraryRepo) ImportMediaFile(ctx context.Context, filePath string, libraryID ...int) (string, error) {
+	if m.Err != nil {
+		return "", m.Err
+	}
+	return "", fmt.Errorf("mock library import is not implemented")
+}
+
 var _ model.LibraryRepository = (*MockLibraryRepo)(nil)
 var _ model.ResourceRepository = (*MockLibraryRepo)(nil)
