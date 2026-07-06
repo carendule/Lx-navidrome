@@ -208,7 +208,7 @@ func TestStrictOnlineEmbedDownloadedFileFailsWhenCoreMetadataMissing(t *testing.
 	if err == nil {
 		t.Fatal("expected strict embed to fail when artist/album are missing")
 	}
-	if reason := onlineEmbedFailureReason(err); reason != "元数据嵌入失败" {
+	if reason := onlineEmbedFailureReason(err); reason != "online.error.embed_metadata_failed" {
 		t.Fatalf("unexpected failure reason: %q (err=%v)", reason, err)
 	}
 }
@@ -232,8 +232,19 @@ func TestStrictOnlineEmbedDownloadedFileFailsWhenCoverMissing(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected strict embed to fail when cover url is missing")
 	}
-	if reason := onlineEmbedFailureReason(err); reason != "元数据嵌入失败" {
+	if reason := onlineEmbedFailureReason(err); reason != "online.error.embed_metadata_failed" {
 		t.Fatalf("unexpected failure reason: %q (err=%v)", reason, err)
+	}
+}
+
+func TestStrictOnlineEmbedLyricFailureIsNonFatal(t *testing.T) {
+	audioPath := "/tmp/fake.mp3"
+	gotPath, err := strictOnlineEmbedHandleResult(audioPath, "", newOnlineEmbedFailure(onlineEmbedReasonLyricFailed, fmt.Errorf("lyric rewrite failed")))
+	if err != nil {
+		t.Fatalf("lyric failure should be non-fatal, got err=%v", err)
+	}
+	if gotPath != audioPath {
+		t.Fatalf("unexpected final path: got=%q want=%q", gotPath, audioPath)
 	}
 }
 

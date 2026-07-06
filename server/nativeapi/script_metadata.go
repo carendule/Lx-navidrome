@@ -5,21 +5,24 @@ import (
 	"strings"
 )
 
-// 改进的脚本元数据提取 - 只从脚本代码提取，不依赖文件名
-// 这是修复的关键：文件名可被篡改，但脚本内容不会被篡改（在验证后）
+// Improved script metadata extraction: parse only from script content,
+// without relying on filename.
+// This is critical for integrity: filenames can be tampered with, while
+// validated script content is authoritative.
 
-// extractMetadataFromCode 从脚本代码中提取元数据
-// 仅支持来自代码的元数据，不进行任何文件名推测
+// extractMetadataFromCode extracts metadata from script content.
+// It only accepts metadata declared in code and does not infer
+// metadata from filenames.
 func extractMetadataFromCode(script string) scriptMetadata {
 	meta := scriptMetadata{}
 
-	// 优先级 1: 块注释格式 (/* ... @name ... */)
-	// 这是 LxServer 使用的格式，也是标准 JSDoc 格式
+	// Priority 1: block comment format (/* ... @name ... */)
+	// This is the format used by LxServer and standard JSDoc.
 	blockCommentMatch := regexp.MustCompile(`(?s)/\*[*!]?([\s\S]*?)\*/`).FindStringSubmatch(script)
 	if len(blockCommentMatch) > 1 {
 		comment := blockCommentMatch[1]
 
-		// @name - 从第一个 @ 到行尾或者 @ 符号
+		// @name - from first @ to line end or next @ marker.
 		if nameMatch := regexp.MustCompile(`@name\s+([^\n@]+)`).FindStringSubmatch(comment); len(nameMatch) > 1 {
 			if val := strings.TrimSpace(nameMatch[1]); val != "" {
 				meta.Name = val
@@ -54,13 +57,14 @@ func extractMetadataFromCode(script string) scriptMetadata {
 			}
 		}
 
-		// 如果从块注释中找到了任何元数据，立即返回（不再查找单行注释）
+		// If any metadata is found in block comments, return immediately
+		// without scanning line comments.
 		if meta.Name != "" || meta.Version != "" || meta.Author != "" {
 			return meta
 		}
 	}
 
-	// 优先级 2: 多行单行注释格式 (连续的 // 注释)
+	// Priority 2: multi-line single-line comment format (consecutive // lines).
 	// 这是备用方案，如果脚本使用单行注释
 	lines := strings.Split(script, "\n")
 	for _, line := range lines {

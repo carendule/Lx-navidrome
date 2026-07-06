@@ -144,18 +144,34 @@ func sanitizeEmbedMode(raw string) string {
 // onlineSourceSettings.NameTemplate. It is applied whenever the
 // settings file is missing, empty, or pre-dates the field. Keep in
 // sync with Online_setting.jsx NAME_TEMPLATE_DEFAULT.
-var defaultOnlineNameTemplate = []string{"歌名", "歌手"}
+var defaultOnlineNameTemplate = []string{"song_title", "artist"}
+
+func normalizeNameTemplateToken(token string) string {
+	switch strings.TrimSpace(token) {
+	case "song_title", "\u6b4c\u540d":
+		return "song_title"
+	case "artist", "\u6b4c\u624b":
+		return "artist"
+	case "album", "\u4e13\u8f91":
+		return "album"
+	case "source", "\u6765\u6e90":
+		return "source"
+	case "quality", "\u97f3\u8d28":
+		return "quality"
+	default:
+		return ""
+	}
+}
 
 // sanitizeOnlineNameTemplate filters an incoming NameTemplate slice
 // down to the allowed token set, de-duplicates, and falls back to the
 // default if the result is empty.
 func sanitizeOnlineNameTemplate(in []string) []string {
-	allowed := map[string]bool{"歌名": true, "歌手": true, "专辑": true, "来源": true, "音质": true}
 	seen := make(map[string]bool, len(in))
 	out := make([]string, 0, len(in))
 	for _, raw := range in {
-		token := strings.TrimSpace(raw)
-		if !allowed[token] || seen[token] {
+		token := normalizeNameTemplateToken(raw)
+		if token == "" || seen[token] {
 			continue
 		}
 		seen[token] = true
@@ -292,7 +308,7 @@ func (api *Router) saveOnlineSourceSettings(w http.ResponseWriter, r *http.Reque
 	// navidrome.log and verify the choice reached disk. The
 	// `[EMBED] settings:saved` line is the one-stop check for
 	// "did my UI selection actually persist?" — if the user
-	// picks "嵌入元数据和歌词" on the panel, hits Save, and
+	// picks "Embed metadata and lyrics" on the panel, hits Save, and
 	// doesn't see this line with mode=all, the request
 	// payload was wrong on the client side.
 	embedTrace(r.Context(), "settings:saved", "embedMode", settings.EmbedMode, "downloadPath", settings.DownloadPath)
@@ -411,10 +427,10 @@ func (api *Router) toggleOnlineSource(w http.ResponseWriter, r *http.Request) {
 		}
 		sources[i].UpdatedAt = now
 		if sources[i].Enabled {
-			sources[i].Status = "正常"
+			sources[i].Status = "Healthy"
 			sources[i].EnabledOrder = maxEnabledOrder(sources) + 1
 		} else {
-			sources[i].Status = "已禁用"
+			sources[i].Status = "Disabled"
 			sources[i].EnabledOrder = 0
 		}
 
@@ -536,7 +552,7 @@ func createOnlineSource(filename, content, sourceURL string, allowUnsafeVM bool)
 	meta, execution := ValidateScriptWithMetadataOptions(content, allowUnsafeVM)
 	if execution.RequireUnsafe {
 		return onlineSource{}, &onlineSourceValidationError{
-			message:       "该脚本需要原生 VM 模式运行，可能存在安全风险，是否继续？",
+			message:       "This script requires native VM mode and may introduce security risks. Continue?",
 			requireUnsafe: true,
 		}
 	}
@@ -580,7 +596,7 @@ func createOnlineSource(filename, content, sourceURL string, allowUnsafeVM bool)
 		AllowUnsafeVM:    allowUnsafeVM,
 		Enabled:          false,
 		EnabledOrder:     0,
-		Status:           "已禁用",
+		Status:           "Disabled",
 		SourceURL:        sourceURL,
 		CreatedAt:        now,
 		UpdatedAt:        now,

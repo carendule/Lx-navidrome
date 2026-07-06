@@ -221,7 +221,7 @@ process.stdin.on('end', async () => {
 				if (dData && dData.sources) registeredSources = dData.sources;
 				if (initResolve) initResolve();
 			} else if (eventName === 'updateAlert') {
-				if (initReject) initReject(new Error('发现新版本,需要更新'));
+				if (initReject) initReject(new Error('A new version was detected and requires an update'));
 			}
 		},
 		on: (eventName, handler) => {
@@ -306,7 +306,7 @@ process.stdin.on('end', async () => {
 			await Promise.race([
 				initPromise,
 				new Promise((_, reject) => {
-					initTimer = setTimeout(() => reject(new Error('初始化超时，请确保脚本调用了 lx.send("inited", ...)')), initTimeoutMs);
+					initTimer = setTimeout(() => reject(new Error('Initialization timeout: ensure the script calls lx.send("inited", ...)')), initTimeoutMs);
 				}),
 			]);
 		} finally {

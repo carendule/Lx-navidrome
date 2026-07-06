@@ -14,7 +14,7 @@
 //   }
 //
 // where nameTemplate is the *ordered* list of chip tokens the user
-// picked in the "下载命名设置" panel (e.g. ["歌名", "音质", "歌手"]),
+// picked in the "Download Name Settings" panel (e.g. ["song_title", "quality", "artist"]),
 // and embedMode controls what the downloader writes into the audio
 // file's tag container (no cover at all / cover+tags / cover+tags
 // +lyrics). Keeping a single source of truth here also makes it
@@ -23,8 +23,8 @@
 
 import { httpClient } from '../dataProvider'
 
-export const NAME_TEMPLATE_TOKENS = ['歌名', '歌手', '专辑', '来源', '音质']
-export const NAME_TEMPLATE_DEFAULT = ['歌名', '歌手']
+export const NAME_TEMPLATE_TOKENS = ['song_title', 'artist', 'album', 'source', 'quality']
+export const NAME_TEMPLATE_DEFAULT = ['song_title', 'artist']
 
 /**
  * Fetch the persisted name template. Returns NAME_TEMPLATE_DEFAULT

@@ -8,15 +8,15 @@ package nativeapi
 //
 // Each source has its own quirks:
 //
-//   - mg (咪咕) — plain LRC over HTTPS, no auth, plain text body.
+//   - mg (Migu) — plain LRC over HTTPS, no auth, plain text body.
 //   - tx (QQ)   — base64-encoded LRC + HTML entity decoding.
-//   - kw (酷我) — XOR-encrypted request params + AES-encrypted
+//   - kw (Kuwo) — XOR-encrypted request params + AES-encrypted
 //                 response body + zlib inflate + GB18030 → UTF-8
 //                 transcoding.
-//   - kg (酷狗) — two-step: search by name/hash to resolve a
+//   - kg (Kugou) — two-step: search by name/hash to resolve a
 //                 content id+key, then download either LRC
 //                 (base64) or KRC (XOR-ciphered, zlib-compressed).
-//   - wy (网易云) — AES-128-ECB "eapi" with an RSA-encrypted
+//   - wy (NetEase) — AES-128-ECB "eapi" with an RSA-encrypted
 //                 session key (raw RSA, no PKCS#1 v1.5 padding).
 //
 // The 5 entry points all return a `onlineLyricResult` struct with
@@ -79,7 +79,7 @@ type onlineLyricResult struct {
 	// RLyric is the romaji / romanization. Empty for most
 	// sources.
 	RLyric string
-	// LXLyric is the per-word (逐字) timing variant. Empty
+	// LXLyric is the per-word timing variant. Empty
 	// unless the source's KRC / YRC blob was parsed. Most
 	// players don't surface this; the embed step ignores it.
 	LXLyric string
@@ -136,7 +136,7 @@ func isSupportedLyricSource(source string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// mg (咪咕) — plain LRC, no auth.
+// mg (Migu) — plain LRC, no auth.
 // Source: lxserver-main/src/modules/utils/musicSdk/mg/lyric.js
 // ---------------------------------------------------------------------------
 
@@ -225,7 +225,7 @@ func onlineLyricMGNormalize(body string) string {
 var onlineLyricLRCTimeRxp = regexp.MustCompile(`^\[(\d+):(\d+)\.(\d+)\]`)
 
 // ---------------------------------------------------------------------------
-// tx (QQ 音乐) — base64 + HTML entity decode.
+// tx (QQ Music) — base64 + HTML entity decode.
 // Source: lxserver-main/src/modules/utils/musicSdk/tx/lyric.js
 // ---------------------------------------------------------------------------
 
@@ -334,7 +334,7 @@ func onlineLyricDecodeHTMLEntities(s string) string {
 var numericEntityRxp = regexp.MustCompile(`&#(\d+);`)
 
 // ---------------------------------------------------------------------------
-// kw (酷我) — XOR + AES-ECB + zlib inflate + GB18030 transcoding.
+// kw (Kuwo) — XOR + AES-ECB + zlib inflate + GB18030 transcoding.
 // Source: lxserver-main/src/modules/utils/musicSdk/kw/lyric.js
 // ---------------------------------------------------------------------------
 
@@ -542,7 +542,7 @@ func onlineLyricKWParseLrc(lrc string) (onlineLyricResult, bool) {
 }
 
 // ---------------------------------------------------------------------------
-// kg (酷狗) — search + LRC/KRC download.
+// kg (Kugou) — search + LRC/KRC download.
 // Source: lxserver-main/src/modules/utils/musicSdk/kg/lyric.js
 // ---------------------------------------------------------------------------
 
@@ -695,7 +695,7 @@ func onlineLyricKRCDecode(b64 string) onlineLyricResult {
 }
 
 // ---------------------------------------------------------------------------
-// wy (网易云) — AES-128-ECB eapi.
+// wy (NetEase) — AES-128-ECB eapi.
 // Source: lxserver-main/src/modules/utils/musicSdk/wy/lyric.js
 // (and wy/utils/crypto.js for the eapi helpers).
 // ---------------------------------------------------------------------------
@@ -761,7 +761,7 @@ func fetchOnlineLyricWY(ctx context.Context, songInfo map[string]any) onlineLyri
 	// the response is large and we only want three fields.
 	lyric := onlineLyricJSONStringFieldAt(body, "lrc", "lyric")
 	if lyric == "" {
-		// Diagnose the empty case. 网易云 has three
+		// Diagnose the empty case. NetEase has three
 		// failure modes worth distinguishing:
 		//
 		//   1. The body is empty (we hit it from this
@@ -776,7 +776,7 @@ func fetchOnlineLyricWY(ctx context.Context, songInfo map[string]any) onlineLyri
 		// the body so the user can grep their navidrome.log
 		// and tell which case they're hitting. The preview
 		// is truncated to keep the trace line reasonable
-		// in size (full 网易云 responses are small anyway).
+		// in size (full NetEase responses are small anyway).
 		preview := body
 		if len(preview) > 200 {
 			preview = preview[:200]
@@ -852,7 +852,7 @@ func onlineLyricPKCS7Pad(b []byte, blockSize int) []byte {
 // onlineLyricWYFetch is a wy-specific transport. It is a
 // straight-line http.Get equivalent (no retry, no fallback)
 // but with structured [EMBED] traces for each failure mode
-// the user is likely to hit when 网易云 is unreachable from
+// the user is likely to hit when NetEase is unreachable from
 // their network:
 //
 //   - lyric:wy:connect-failed (network unreachable / DNS /
@@ -865,7 +865,7 @@ func onlineLyricPKCS7Pad(b []byte, blockSize int) []byte {
 //     server flooding the response)
 //
 // The 2 MiB cap matches the rest of the lyric clients; the
-// real 网易云 lyric endpoint returns well under 50 KB.
+// real NetEase lyric endpoint returns well under 50 KB.
 func onlineLyricWYFetch(ctx context.Context, url string) ([]byte, bool) {
 	client := onlineLyricSongInfoClient()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -892,7 +892,7 @@ func onlineLyricWYFetch(ctx context.Context, url string) ([]byte, bool) {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Drain a small prefix of the body for the trace
-		// so the user can see the 网易云 error envelope
+		// so the user can see the NetEase error envelope
 		// (e.g. {"code":460,"message":"需要登录"}) without
 		// having to re-run with curl.
 		var preview [256]byte

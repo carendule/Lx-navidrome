@@ -22,7 +22,8 @@ import GetAppIcon from '@material-ui/icons/GetApp'
 import { useTranslate } from 'react-admin'
 import { httpClient } from '../dataProvider'
 import {
-    SOURCE_BADGE,
+    SOURCES,
+    TYPES,
     RANK_COLORS,
     QUALITY_META,
     getSourceBadge,
@@ -30,19 +31,16 @@ import {
     formatDuration,
 } from './Online_constants'
 
-const SOURCES = [
-    { key: 'wy', label: '网易云' },
-    { key: 'tx', label: 'QQ音乐' },
-    { key: 'kg', label: '酷狗' },
-    { key: 'kw', label: '酷我' },
-    { key: 'mg', label: '咪咕' },
-]
+const sourceName = (source, translate) => {
+    const fallback = getSourceBadge(source).name || String(source || '').toUpperCase()
+    return translate(`online.sources.${source}`, { _: fallback })
+}
 
-const TYPES = [
-    { key: 'song', label: '歌曲' },
-    { key: 'singer', label: '歌手' },
-    { key: 'album', label: '专辑' },
-]
+const searchTypeLabel = (typeKey, translate) => {
+    const fallback =
+        typeKey === 'song' ? 'Song' : typeKey === 'singer' ? 'Artist' : typeKey === 'album' ? 'Album' : typeKey
+    return translate(`online.search.types.${typeKey}`, { _: fallback })
+}
 
 const useStyles = makeStyles((theme) => ({
     root: {
@@ -340,7 +338,7 @@ const OnlineSongSearch = ({
     const [hotLoading, setHotLoading] = useState(false)
     const [hotDebug, setHotDebug] = useState('')
 
-    const badge = SOURCE_BADGE[source] || {}
+    const badge = getSourceBadge(source)
     const totalPages = Math.max(1, Math.ceil((Number(total) || 0) / limit))
 
     const loadHotSearch = useCallback((src, forceRefresh = false) => {
@@ -426,13 +424,13 @@ const OnlineSongSearch = ({
                 .catch(() => {
                     setResults([])
                     setTotal(0)
-                    setSearchError('搜索失败，请稍后重试')
+                    setSearchError(translate('online.search.error', { _: 'Search failed, please try again later' }))
                 })
                 .finally(() => {
                     setSearchLoading(false)
                 })
         },
-        [source, type, limit],
+        [source, type, limit, translate],
     )
 
     const handleSearch = useCallback(() => {
@@ -469,7 +467,7 @@ const OnlineSongSearch = ({
         runSearch(lastKeyword || query, target)
     }, [jumpPageInput, runSearch, lastKeyword, query, totalPages])
 
-    const searchPlaceholder = translate('online.search.placeholder', { _: '搜索歌曲、歌手...' })
+    const searchPlaceholder = translate('online.search.placeholder', { _: 'Search songs or artists...' })
 
     return (
         <div className={classes.root}>
@@ -507,7 +505,7 @@ const OnlineSongSearch = ({
                 >
                     {TYPES.map((t) => (
                         <MenuItem key={t.key} value={t.key}>
-                            {t.label}
+                            {searchTypeLabel(t.key, translate)}
                         </MenuItem>
                     ))}
                 </Select>
@@ -519,7 +517,7 @@ const OnlineSongSearch = ({
                 >
                     {SOURCES.map((s) => (
                         <MenuItem key={s.key} value={s.key}>
-                            {s.label}
+                            {sourceName(s.key, translate)}
                         </MenuItem>
                     ))}
                 </Select>
@@ -537,7 +535,7 @@ const OnlineSongSearch = ({
                             </Typography>
                             <Chip
                                 size="small"
-                                label={badge.name}
+                                label={sourceName(source, translate)}
                                 style={{
                                     backgroundColor: badge.bg,
                                     color: badge.color,
@@ -610,6 +608,7 @@ const OnlineSongSearch = ({
                                 })}
                             </Button>
                         </div>
+
                         {hotDebug && (
                             <div
                                 style={{
@@ -642,19 +641,19 @@ const OnlineSongSearch = ({
                         <div className={classes.resultStatus}>
                             <Typography variant="subtitle2">
                                 {lastKeyword
-                                    ? `${lastKeyword} · ${results.length} 条结果`
-                                    : '搜索结果'}
+                                    ? `${lastKeyword} · ${results.length} ${translate('online.search.results', { _: 'results' })}`
+                                    : translate('online.search.resultsTitle', { _: 'Search Results' })}
                             </Typography>
                             {searchLoading && <CircularProgress size={18} />}
                         </div>
 
                         <div className={classes.tableHeader}>
                             <span className={classes.colIdx}>#</span>
-                            <span>歌曲标题</span>
-                            <span className={classes.mobileHidden}>歌手</span>
-                            <span className={classes.mobileHidden}>专辑</span>
-                            <span className={classes.mobileHidden}>时长</span>
-                            <span className={classes.headerCenterCell}>操作</span>
+                            <span>{translate('online.songTable.title', { _: 'Title' })}</span>
+                            <span className={classes.mobileHidden}>{translate('online.songTable.artist', { _: 'Artist' })}</span>
+                            <span className={classes.mobileHidden}>{translate('online.songTable.album', { _: 'Album' })}</span>
+                            <span className={classes.mobileHidden}>{translate('online.songTable.duration', { _: 'Duration' })}</span>
+                            <span className={classes.headerCenterCell}>{translate('online.songTable.action', { _: 'Action' })}</span>
                         </div>
 
                         {searchLoading ? (
@@ -668,7 +667,9 @@ const OnlineSongSearch = ({
                         ) : results.length === 0 ? (
                             <div className={classes.emptyBox}>
                                 <Typography variant="body2">
-                                    {lastKeyword ? '未找到匹配结果' : '输入关键词开始搜索'}
+                                    {lastKeyword
+                                        ? translate('online.search.noMatch', { _: 'No matching results' })
+                                        : translate('online.search.inputHint', { _: 'Enter a keyword to start searching' })}
                                 </Typography>
                             </div>
                         ) : (
@@ -696,12 +697,12 @@ const OnlineSongSearch = ({
                                                         className={classes.songName}
                                                         title={item.name || ''}
                                                     >
-                                                        {item.name || '未知标题'}
+                                                        {item.name || translate('online.common.unknownTitle', { _: 'Unknown title' })}
                                                     </Typography>
                                                     <div className={classes.tagRow}>
                                                         <Chip
                                                             size="small"
-                                                            label={sourceInfo.name}
+                                                            label={sourceName(item.source || source, translate)}
                                                             className={classes.sourceTag}
                                                             style={{
                                                                 backgroundColor: sourceInfo.bg,
@@ -753,8 +754,8 @@ const OnlineSongSearch = ({
                                                     size="small"
                                                     className={classes.downloadBtn}
                                                     onClick={() => onOpenDownloadDialog(item)}
-                                                    aria-label="下载"
-                                                    title="下载"
+                                                    aria-label={translate('online.download.action', { _: 'Download' })}
+                                                    title={translate('online.download.action', { _: 'Download' })}
                                                 >
                                                     <GetAppIcon fontSize="small" />
                                                 </IconButton>
@@ -767,7 +768,7 @@ const OnlineSongSearch = ({
 
                         <div className={classes.paginationRow}>
                             <Typography className={classes.paginationInfo}>
-                                {`共 ${total} 条 · 第 ${page} / ${totalPages} 页`}
+                                {`${translate('online.pagination.total', { _: 'Total' })} ${total} · ${translate('online.pagination.page', { _: 'Page' })} ${page} / ${totalPages}`}
                             </Typography>
                             <div className={classes.paginationControls}>
                                 <Button
@@ -776,7 +777,7 @@ const OnlineSongSearch = ({
                                     onClick={handlePrevPage}
                                     disabled={searchLoading || page <= 1}
                                 >
-                                    上一页
+                                    {translate('online.pagination.prev', { _: 'Previous' })}
                                 </Button>
                                 <Button
                                     size="small"
@@ -784,7 +785,7 @@ const OnlineSongSearch = ({
                                     onClick={handleNextPage}
                                     disabled={searchLoading || page >= totalPages}
                                 >
-                                    下一页
+                                    {translate('online.pagination.next', { _: 'Next' })}
                                 </Button>
                                 <TextField
                                     value={jumpPageInput}
@@ -794,7 +795,7 @@ const OnlineSongSearch = ({
                                     variant="outlined"
                                     size="small"
                                     className={classes.jumpInput}
-                                    placeholder="页码"
+                                    placeholder={translate('online.pagination.pageInput', { _: 'Page' })}
                                     onKeyDown={(e) => {
                                         if (e.key === 'Enter') handleJumpPage()
                                     }}
@@ -806,7 +807,7 @@ const OnlineSongSearch = ({
                                     onClick={handleJumpPage}
                                     disabled={searchLoading}
                                 >
-                                    跳转
+                                    {translate('online.pagination.go', { _: 'Go' })}
                                 </Button>
                             </div>
                         </div>

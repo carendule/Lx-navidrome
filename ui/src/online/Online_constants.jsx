@@ -6,27 +6,27 @@ export const VIEW_MODES = {
 
 // Data sources
 export const SOURCES = [
-    { key: 'wy', label: '网易云' },
-    { key: 'tx', label: 'QQ音乐' },
-    { key: 'kg', label: '酷狗' },
-    { key: 'kw', label: '酷我' },
-    { key: 'mg', label: '咪咕' },
+    { key: 'wy', label: 'NetEase' },
+    { key: 'tx', label: 'QQ Music' },
+    { key: 'kg', label: 'Kugou' },
+    { key: 'kw', label: 'Kuwo' },
+    { key: 'mg', label: 'Migu' },
 ]
 
 // Search types
 export const TYPES = [
-    { key: 'song', label: '歌曲' },
-    { key: 'singer', label: '歌手' },
-    { key: 'album', label: '专辑' },
+    { key: 'song', label: 'Song' },
+    { key: 'singer', label: 'Artist' },
+    { key: 'album', label: 'Album' },
 ]
 
 // Source badge styles
 export const SOURCE_BADGE = {
-    wy: { bg: '#fde2e2', color: '#a13030', name: '网易' },
+    wy: { bg: '#fde2e2', color: '#a13030', name: 'NetEase' },
     tx: { bg: '#d7f6e8', color: '#1f7a53', name: 'QQ' },
-    kg: { bg: '#dfe8ff', color: '#2c4ca3', name: '酷狗' },
-    kw: { bg: '#fdeccf', color: '#935b00', name: '酷我' },
-    mg: { bg: '#ffe1ea', color: '#a3335d', name: '咪咕' },
+    kg: { bg: '#dfe8ff', color: '#2c4ca3', name: 'Kugou' },
+    kw: { bg: '#fdeccf', color: '#935b00', name: 'Kuwo' },
+    mg: { bg: '#ffe1ea', color: '#a3335d', name: 'Migu' },
 }
 
 // Rank colors for hot search
@@ -39,27 +39,27 @@ export const RANK_COLORS = [
 // Playlist sort options by source
 export const PLAYLIST_SORT_OPTIONS_BY_SOURCE = {
     wy: [
-        { key: 'hot', label: '最热' },
-        { key: 'new', label: '最新' },
+        { key: 'hot', label: 'Hottest' },
+        { key: 'new', label: 'Newest' },
     ],
     tx: [
-        { key: 'hot', label: '最热' },
-        { key: 'new', label: '最新' },
+        { key: 'hot', label: 'Hottest' },
+        { key: 'new', label: 'Newest' },
     ],
     kg: [
-        { key: '5', label: '推荐' },
-        { key: '6', label: '最热' },
-        { key: '7', label: '最新' },
-        { key: '3', label: '热藏' },
-        { key: '8', label: '飙升' },
+        { key: '5', label: 'Recommended' },
+        { key: '6', label: 'Hottest' },
+        { key: '7', label: 'Newest' },
+        { key: '3', label: 'Trending Collection' },
+        { key: '8', label: 'Rising' },
     ],
     kw: [
-        { key: 'new', label: '最新' },
-        { key: 'hot', label: '最热' },
+        { key: 'new', label: 'Newest' },
+        { key: 'hot', label: 'Hottest' },
     ],
     bd: [
-        { key: 'hot', label: '最热' },
-        { key: 'new', label: '最新' },
+        { key: 'hot', label: 'Hottest' },
+        { key: 'new', label: 'Newest' },
     ],
 }
 
@@ -77,7 +77,7 @@ export const QUALITY_ORDER = ['master', 'flac24bit', 'ape', 'flac', '320k', '128
 
 // Utility functions
 export const getSourceBadge = (src) =>
-    SOURCE_BADGE[src] || { bg: '#e7e7e7', color: '#666', name: src || '未知' }
+    SOURCE_BADGE[src] || { bg: '#e7e7e7', color: '#666', name: src || 'Unknown' }
 
 export const getPlaylistSortOptions = (source) =>
     PLAYLIST_SORT_OPTIONS_BY_SOURCE[source] || PLAYLIST_SORT_OPTIONS_BY_SOURCE.wy
@@ -93,7 +93,7 @@ export const formatCompactCount = (value) => {
     const num = Number(value)
     if (!Number.isFinite(num) || num <= 0) return '0'
     if (num < 10000) return String(Math.round(num))
-    return `${(num / 10000).toFixed(num >= 100000 ? 0 : 1)}万`
+    return `${(num / 1000).toFixed(num >= 10000 ? 0 : 1)}K`
 }
 
 export const formatDuration = (value) => {
@@ -119,7 +119,7 @@ export const formatDuration = (value) => {
 export const formatFileSize = (input) => {
     if (typeof input === 'string') {
         const text = input.trim()
-        if (!text) return '大小未知'
+        if (!text) return 'Unknown size'
         if (/^\d+(\.\d+)?\s*(B|KB|MB|GB|TB)$/i.test(text)) return text.toUpperCase()
         if (/^(\d+\.?\d*)([KMGT])$/i.test(text)) {
             const m = text.match(/^(\d+\.?\d*)([KMGT])$/i)
@@ -137,7 +137,7 @@ export const formatFileSize = (input) => {
     }
 
     const num = Number(input)
-    if (!Number.isFinite(num) || num <= 0) return '大小未知'
+    if (!Number.isFinite(num) || num <= 0) return 'Unknown size'
     if (num < 1024) return `${num} B`
     if (num < 1024 * 1024) return `${(num / 1024).toFixed(1)} KB`
     if (num < 1024 * 1024 * 1024) return `${(num / 1024 / 1024).toFixed(1)} MB`

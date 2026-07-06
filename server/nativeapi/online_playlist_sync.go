@@ -168,33 +168,33 @@ func classifyPlaylistSyncFailureReason(err error, fallback string) string {
 		if fallback != "" {
 			return fallback
 		}
-		return "未知错误"
+		return "online.error.unknown"
 	}
 
 	msg := strings.ToLower(strings.TrimSpace(err.Error()))
 	if embedReason := onlineEmbedFailureReason(err); embedReason != "" {
 		return embedReason
 	}
-	if strings.Contains(msg, "未找到支持") || strings.Contains(msg, "启用音源") || strings.Contains(msg, "no enabled source") || strings.Contains(msg, "no compatible quality") {
-		return "无可用解析源"
+	if strings.Contains(msg, "no enabled source") || strings.Contains(msg, "no compatible quality") {
+		return "online.error.no_available_source"
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(msg, "timeout") || strings.Contains(msg, "connection reset") || strings.Contains(msg, "broken pipe") || strings.Contains(msg, "network is unreachable") || strings.Contains(msg, "connection refused") || strings.Contains(msg, "no such host") || strings.Contains(msg, "tls") || strings.Contains(msg, "i/o timeout") || strings.Contains(msg, "unexpected eof") || strings.Contains(msg, "eof") {
-		return "下载网络中断"
+		return "online.error.download_network_interrupted"
 	}
 
 	if strings.Contains(msg, "import media failed") || strings.Contains(msg, "failed to import") || strings.Contains(msg, "import") {
-		return "入库失败"
+		return "online.error.import_failed"
 	}
 
 	if strings.Contains(msg, "add media to playlist failed") || strings.Contains(msg, "playlist") {
-		return "入歌单失败"
+		return "online.error.add_to_playlist_failed"
 	}
 
 	if fallback != "" {
 		return fallback
 	}
-	return "下载源失败"
+	return "online.error.download_source_failed"
 }
 
 func appendFailedSongDetail(task *playlistSyncTask, song map[string]any, reason string) {
@@ -209,7 +209,7 @@ func appendFailedSongDetail(task *playlistSyncTask, song map[string]any, reason 
 		return
 	}
 	if strings.TrimSpace(reason) == "" {
-		reason = "未知错误"
+		reason = "online.error.unknown"
 	}
 	for _, item := range task.FailedSongDetails {
 		if item.Name == name && item.Singer == singer {
@@ -247,7 +247,7 @@ func handlePlaylistSyncStart(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Load default name template from settings
-		nameTemplate := []string{"歌名", "歌手"}
+		nameTemplate := []string{"song_title", "artist"}
 		if err == nil && len(settings.NameTemplate) > 0 {
 			nameTemplate = settings.NameTemplate
 		}
@@ -365,7 +365,7 @@ func handlePlaylistSyncTasks(w http.ResponseWriter, _ *http.Request) {
 		task.mu.RLock()
 		title := task.PlaylistName
 		if title == "" {
-			title = "歌单同步"
+			title = "Playlist Sync"
 		}
 		source := task.SourceType
 		if source == "" {
@@ -410,14 +410,14 @@ func handlePlaylistSyncRetryAll(w http.ResponseWriter, _ *http.Request) {
 			task.Status = "sync-completed"
 			task.Progress = 100
 			task.RemainingCount = 0
-			task.CurrentSongTitle = "完成"
+			task.CurrentSongTitle = "Completed"
 			task.UpdatedAt = now
 			changed = true
 			continue
 		}
 		task.Status = "syncing"
 		task.PauseRequested = false
-		task.CurrentSongTitle = "重试中"
+		task.CurrentSongTitle = "Retrying"
 		task.FailedSongs = []string{}
 		task.FailedSongDetails = []playlistSyncFailedSong{}
 		task.RemainingCount = len(task.Songs) - len(task.CompletedSongs)
@@ -453,7 +453,7 @@ func handlePlaylistSyncCancelAll(w http.ResponseWriter, _ *http.Request) {
 		case "syncing", "resolving", "downloading", "queued":
 			task.PauseRequested = true
 			task.Status = "canceled"
-			task.CurrentSongTitle = "已取消"
+			task.CurrentSongTitle = "Canceled"
 			task.UpdatedAt = now
 			if task.CurrentCancel != nil {
 				task.CurrentCancel()
@@ -593,7 +593,7 @@ func syncPlaylistSongs(task *playlistSyncTask) {
 			if err := addMediaToPlaylist(task.RequestUser, task.NavidromPlaylistID, matchedMediaID); err != nil {
 				log.Error(nil, "Failed to add existing library song to Navidrome playlist", "error", err, "songName", task.CurrentSongTitle, "playlistId", task.NavidromPlaylistID, "mediaId", matchedMediaID)
 				task.FailedSongs = append(task.FailedSongs, task.CurrentSongTitle)
-				appendFailedSongDetail(task, song, classifyPlaylistSyncFailureReason(err, "入歌单失败"))
+				appendFailedSongDetail(task, song, classifyPlaylistSyncFailureReason(err, "online.error.add_to_playlist_failed"))
 				task.Status = "syncing"
 				task.UpdatedAt = time.Now()
 				broadcastPlaylistSyncChange()
@@ -625,14 +625,14 @@ func syncPlaylistSongs(task *playlistSyncTask) {
 		if err != nil {
 			if task.Status == "paused" || task.PauseRequested || errors.Is(err, context.Canceled) {
 				task.Status = "canceled"
-				task.CurrentSongTitle = "已取消"
+				task.CurrentSongTitle = "Canceled"
 				task.UpdatedAt = time.Now()
 				broadcastPlaylistSyncChange()
 				break
 			}
 			log.Error(nil, "Failed to download song for playlist sync after quality fallback", err, "songName", task.CurrentSongTitle)
 			task.FailedSongs = append(task.FailedSongs, task.CurrentSongTitle)
-			appendFailedSongDetail(task, song, classifyPlaylistSyncFailureReason(err, "下载源失败"))
+			appendFailedSongDetail(task, song, classifyPlaylistSyncFailureReason(err, "online.error.download_source_failed"))
 			task.Status = "syncing"
 			task.UpdatedAt = time.Now()
 			broadcastPlaylistSyncChange()
@@ -648,7 +648,7 @@ func syncPlaylistSongs(task *playlistSyncTask) {
 		if err := addSongToNavidromPlaylist(task.RequestUser, task.NavidromPlaylistID, song, downloadedFilePath); err != nil {
 			log.Error(nil, "Failed to add song to Navidrome playlist", "error", err, "songName", task.CurrentSongTitle, "playlistId", task.NavidromPlaylistID)
 			task.FailedSongs = append(task.FailedSongs, task.CurrentSongTitle)
-			appendFailedSongDetail(task, song, classifyPlaylistSyncFailureReason(err, "入库失败"))
+			appendFailedSongDetail(task, song, classifyPlaylistSyncFailureReason(err, "online.error.import_failed"))
 			task.Status = "syncing"
 			task.UpdatedAt = time.Now()
 			broadcastPlaylistSyncChange()
@@ -674,13 +674,13 @@ func syncPlaylistSongs(task *playlistSyncTask) {
 	if task.Status != "canceled" && task.Status != "paused" {
 		if len(task.FailedSongDetails) > 0 {
 			task.Status = "sync-error"
-			task.CurrentSongTitle = "本轮完成，部分歌曲失败"
+			task.CurrentSongTitle = "Completed with partial failures"
 			task.RemainingCount = len(task.FailedSongDetails)
 			log.Debug(nil, "Setting task to sync-error after full round", "taskID", task.ID, "failedCount", len(task.FailedSongDetails))
 		} else {
 			task.Status = "sync-completed"
 			task.Progress = 100
-			task.CurrentSongTitle = "完成"
+			task.CurrentSongTitle = "Completed"
 			task.RemainingCount = 0
 			log.Debug(nil, "Setting task to sync-completed", "taskID", task.ID)
 		}
@@ -840,7 +840,7 @@ func downloadSongWithQualityFallback(song map[string]any, sourceStr string, qual
 		return "", "", err
 	}
 	if len(candidates) == 0 {
-		return "", "", fmt.Errorf("未找到支持 %s 的启用音源脚本", sourceStr)
+		return "", "", fmt.Errorf("no enabled source script supports %s", sourceStr)
 	}
 	log.Debug(nil, "Playlist sync quality candidates",
 		"songId", stringValue(song["id"]),

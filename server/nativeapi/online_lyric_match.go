@@ -96,8 +96,8 @@ const onlineLyricMatchDurationToleranceSec = 3
 // even a weakly-similar title — a song that's exactly the
 // right length is almost certainly the right song, even
 // when the source-tagger labeled the title with a different
-// suffix (e.g. one says "起风了" and another says
-// "起风了 (伴奏版)").
+// suffix (e.g. one says "Song" and another says
+// "Song (Instrumental)").
 const onlineLyricMatchDurationStrongToleranceSec = 1
 
 // onlineLyricMatchTitleMin / onlineLyricMatchArtistMin
@@ -110,7 +110,7 @@ const onlineLyricMatchDurationStrongToleranceSec = 1
 //
 // 60 was picked by sampling: a normalized exact match
 // scores 100, a normalized match with one extra token
-// (e.g. "起风了 现场版" vs "起风了") scores ~67, a
+// (e.g. "Song Live" vs "Song") scores ~67, a
 // clearly wrong title with 0 shared tokens scores 0. 60
 // catches the typical cross-source divergence (version
 // suffix) and rejects songs with substantially different
@@ -132,7 +132,7 @@ const onlineLyricMatchTitleOnlyMin = 80
 //
 // 50 was picked empirically: a normalized title that
 // overlaps by half its tokens with the song's title
-// (e.g. "起风了 现场版" vs "起风了" → 1/2) scores 50, and
+// (e.g. "Song Live" vs "Song" -> 1/2) scores 50, and
 // is enough evidence when corroborated by a matching
 // artist or duration.
 const onlineLyricMatchTitleLooseWithArtistOrDuration = 50
@@ -140,15 +140,15 @@ const onlineLyricMatchTitleLooseWithArtistOrDuration = 50
 // onlineLyricNormalizeForMatch strips the kind of
 // version-suffix noise that makes cross-source matching
 // fail: parenthetical release differences (Live, Remix,
-// 现场版, 伴奏, Instrumental, Demo, Acoustic, Explicit,
-// 纯音乐, etc.), trailing punctuation, and doubled
+// stage/live tags, instrumental tags, demo/acoustic/explicit,
+// etc.), trailing punctuation, and doubled
 // whitespace. Applied to BOTH sides of the title
-// comparison so "起风了" and "起风了 (Live)" both reduce
-// to "起风了".
+// comparison so "Song" and "Song (Live)" both reduce
+// to "Song".
 //
 // We do NOT touch the artist string. Artist tags are
 // stable across sources; normalizing them would invite
-// false positives (e.g. "Jay Chou" vs "Jay Chou / 周杰伦"
+// false positives (e.g. "Jay Chou" vs "Jay Chou / alias"
 // would normalize to the same thing and pass, but those
 // are legitimately different in some taggers' views).
 func onlineLyricNormalizeForMatch(s string) string {
@@ -160,7 +160,7 @@ func onlineLyricNormalizeForMatch(s string) string {
 	// pattern matches both halfwidth and fullwidth
 	// brackets, and any text inside (we only consume
 	// the brackets, not the inner text — some sources
-	// emit "起风了 (Live) - 2024 Remaster" where the
+	// emit "Song (Live) - 2024 Remaster" where the
 	// part after the closing paren is meaningful).
 	//
 	// We use explicit Unicode escapes for the
@@ -185,12 +185,12 @@ func onlineLyricNormalizeForMatch(s string) string {
 	// appears when the source uses a "Song - Version"
 	// pattern (common in CDDB / MusicBrainz); the plain
 	// form appears when the source appends a space +
-	// word (common in 网易云's older tagger).
+	// word (common in older source taggers).
 	standaloneSuffixes := []string{
 		"- live", "- remix", "- demo", "- acoustic", "- instrumental", "- explicit",
-		"- 现场版", "- 伴奏版", "- 纯音乐版", "- 原版", "- 试听版", "- 翻唱版", "- 国语版",
+		"- \u73b0\u573a\u7248", "- \u4f34\u594f\u7248", "- \u7eaf\u97f3\u4e50\u7248", "- \u539f\u7248", "- \u8bd5\u542c\u7248", "- \u7ffb\u5531\u7248", "- \u56fd\u8bed\u7248",
 		" live", " remix", " demo", " acoustic", " instrumental", " explicit",
-		" 现场版", " 伴奏版", " 纯音乐版", " 原版", " 试听版", " 翻唱版", " 国语版",
+		" \u73b0\u573a\u7248", " \u4f34\u594f\u7248", " \u7eaf\u97f3\u4e50\u7248", " \u539f\u7248", " \u8bd5\u542c\u7248", " \u7ffb\u5531\u7248", " \u56fd\u8bed\u7248",
 	}
 	lower := strings.ToLower(s)
 	for _, suf := range standaloneSuffixes {
@@ -252,7 +252,7 @@ func onlineLyricSongInfoFields(songInfo map[string]any) (name, singer string, du
 
 // onlineLyricMatchComputeSignals normalizes the title
 // strings (stripping version suffixes like "(Live)" /
-// "现场版") and produces the three similarity scores
+// "live version") and produces the three similarity scores
 // the rules then gate on. Returns the populated score
 // struct with TitleScore / ArtistScore / DurationDelta
 // set to -1 when the corresponding signal is absent.
@@ -306,7 +306,7 @@ func onlineLyricMatchComputeSignals(c onlineLyricCandidate, wantName, wantSinger
 //     (onlineLyricMatchTitleOnlyMin = 80) because there's
 //     no cross-check.
 //  5. Duration is exact AND no id tags at all. The
-//     酷狗 KRC-after-strip scenario: real lyric, real
+//     KRC-after-strip scenario: real lyric, real
 //     runtime, just no metadata.
 //
 // Two hard vetos short-circuit the rules:
@@ -442,7 +442,7 @@ type onlineLyricMatchAttempt struct {
 }
 
 // onlineLyricFallbackOrder is the canonical priority list
-// for multi-source fallback. wy is first because 网易云 has
+// for multi-source fallback. wy is first because it has
 // the largest Chinese-population catalog and the most
 // accurate per-line timing; mg is last among the public
 // sources because mrcUrl (their encrypted MRC variant) is

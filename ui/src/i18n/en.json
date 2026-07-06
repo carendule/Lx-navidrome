@@ -655,13 +655,13 @@
     "nameTemplateEmpty": "(All clips selected)",
     "nameTemplateNoneSelected": "(Drag at least one clip from the available row)",
     "nameTemplateHint": "Tip: drag chips between the two rows. The order in the selected row becomes the filename template and is saved automatically when you drop a chip.",
-    "embedModeTitle": "元数据嵌入设置",
-    "embedModeHint": "请选择下载文件是否嵌入元数据及歌词",
-    "embedModeSaving": "保存中…",
+    "embedModeTitle": "Metadata Embedding Settings",
+    "embedModeHint": "Choose whether downloaded files should include metadata and lyrics",
+    "embedModeSaving": "Saving...",
     "embedMode": {
-      "none": "不嵌入",
-      "metadata": "仅嵌入元数据",
-      "all": "嵌入元数据和歌词"
+      "none": "Do not embed",
+      "metadata": "Embed metadata only",
+      "all": "Embed metadata and lyrics"
     },
     "manageOrAdd": "Add",
     "enabled": "Enabled",
@@ -669,10 +669,156 @@
     "disable": "Disable",
     "enable": "Enable",
     "search": {
+      "pageTitle": "Online Search",
       "button": "Search",
+      "placeholder": "Search songs or artists...",
+      "error": "Search failed, please try again later",
+      "results": "results",
+      "resultsTitle": "Search Results",
+      "noMatch": "No matching results",
+      "inputHint": "Enter a keyword to start searching",
       "hotSearch": "Trending Searches",
       "hotEmpty": "No trending data",
-      "refreshHot": "Refresh Trending"
+      "refreshHot": "Refresh Trending",
+      "types": {
+        "song": "Song",
+        "singer": "Artist",
+        "album": "Album"
+      }
+    },
+    "mode": {
+      "song": "Online Songs",
+      "playlist": "Online Playlists",
+      "songShort": "Songs",
+      "playlistShort": "Playlists"
+    },
+    "sources": {
+      "wy": "NetEase",
+      "tx": "QQ Music",
+      "kg": "Kugou",
+      "kw": "Kuwo",
+      "mg": "Migu"
+    },
+    "playlist": {
+      "searchPlaceholder": "Search playlists...",
+      "refreshPlaylists": "Refresh Playlists",
+      "syncToNavidrome": "Sync to Navidrome",
+      "openOfficial": "Open official playlist page",
+      "idLabel": "Playlist ID",
+      "titleFallback": "Playlist",
+      "noDescription": "No playlist description available",
+      "emptySongs": "No songs in this playlist",
+      "emptyRecommendations": "No recommended playlists",
+      "category": {
+        "all": "All"
+      },
+      "unit": {
+        "songs": "songs",
+        "plays": "plays"
+      },
+      "sort": {
+        "recommended": "Recommended",
+        "hottest": "Hottest",
+        "newest": "Newest",
+        "trendingCollection": "Trending Collection",
+        "rising": "Rising"
+      },
+      "error": {
+        "loadCategories": "Failed to load playlist categories. Please retry later.",
+        "loadRecommendations": "Failed to load playlist recommendations. Please retry later.",
+        "missingId": "Playlist ID is missing. Unable to load details.",
+        "loadDetails": "Failed to load playlist details. Please retry later.",
+        "noSongsForSync": "No songs were fetched from this playlist. Sync cannot start.",
+        "parseQualities": "Unable to parse available playlist qualities. Please retry later."
+      },
+      "syncQuality": {
+        "title": "Select sync quality",
+        "hint": "This playlist supports the following qualities. Higher quality is recommended.",
+        "fallbackHint": "If the selected quality fails, the system will automatically fall back to another available quality.",
+        "confirm": "Confirm Sync"
+      }
+    },
+    "songTable": {
+      "title": "Title",
+      "artist": "Artist",
+      "album": "Album",
+      "duration": "Duration",
+      "action": "Action"
+    },
+    "download": {
+      "title": "Downloads",
+      "tasksSuffix": "tasks",
+      "empty": "No download tasks",
+      "action": "Download",
+      "pickQuality": "Select download quality",
+      "currentSong": "Current song",
+      "noQualityAvailable": "No quality information available for the current song",
+      "pickMethod": "Select download method",
+      "browser": "Browser download",
+      "server": "Server download",
+      "resolveFailed": "Resolution failed",
+      "resolveFailedHint": "The currently enabled source could not resolve a playable URL.",
+      "addedToServerQueue": "Added to server download queue",
+      "unknownSong": "Unknown song",
+      "unknownSource": "Unknown source",
+      "unknownArtist": "Unknown artist",
+      "unknownTask": "Unknown task",
+      "reusedFromLibrary": "reused from library",
+      "reasonLabel": "Reason",
+      "playlistSyncTask": "Playlist sync task",
+      "failedListTitle": "Playlist sync failed list",
+      "taskName": "Task",
+      "exportTime": "Export time",
+      "index": "No.",
+      "songName": "Song",
+      "artist": "Artist",
+      "failedReason": "Reason",
+      "remaining": "Remaining",
+      "failedCount": "Failed",
+      "noFailedSongs": "No failed song details",
+      "exportFailedList": "Export failed list (.txt)",
+      "status": {
+        "queued": "Queued",
+        "resolving": "Resolving",
+        "downloading": "Downloading",
+        "completed": "Completed",
+        "failed": "Failed",
+        "paused": "Paused",
+        "canceled": "Canceled",
+        "syncing": "Syncing",
+        "error": "Error",
+        "processing": "Processing"
+      }
+    },
+    "pagination": {
+      "total": "Total",
+      "page": "Page",
+      "prev": "Previous",
+      "next": "Next",
+      "pageInput": "Page",
+      "go": "Go"
+    },
+    "common": {
+      "unknownTitle": "Unknown title"
+    },
+    "error": {
+      "unknown": "Unknown error",
+      "embed_metadata_failed": "Metadata embedding failed",
+      "embed_lyric_failed": "Lyric embedding failed",
+      "no_available_source": "No available source",
+      "download_network_interrupted": "Download interrupted due to network issues",
+      "import_failed": "Import failed",
+      "add_to_playlist_failed": "Failed to add media to playlist",
+      "download_source_failed": "Download source failed"
+    },
+    "nameTemplate": {
+      "tokens": {
+        "song_title": "Song title",
+        "artist": "Artist",
+        "album": "Album",
+        "source": "Source",
+        "quality": "Quality"
+      }
     }
   },
   "downloadList": {

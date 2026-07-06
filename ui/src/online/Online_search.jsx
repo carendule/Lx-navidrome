@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { Title, useNotify } from 'react-admin'
+import { Title, useNotify, useTranslate } from 'react-admin'
 import {
   Button,
   CircularProgress,
@@ -212,7 +212,7 @@ const getQualitySizeMap = (item) => {
   const formatFileSize = (input) => {
     if (typeof input === 'string') {
       const text = input.trim()
-      if (!text) return '大小未知'
+      if (!text) return 'Unknown size'
       if (/^\d+(\.\d+)?\s*(B|KB|MB|GB|TB)$/i.test(text)) return text.toUpperCase()
       if (/^(\d+\.?\d*)([KMGT])$/i.test(text)) {
         const m = text.match(/^(\d+\.?\d*)([KMGT])$/i)
@@ -230,7 +230,7 @@ const getQualitySizeMap = (item) => {
     }
 
     const num = Number(input)
-    if (!Number.isFinite(num) || num <= 0) return '大小未知'
+    if (!Number.isFinite(num) || num <= 0) return 'Unknown size'
     if (num < 1024) return `${num} B`
     if (num < 1024 * 1024) return `${(num / 1024).toFixed(1)} KB`
     if (num < 1024 * 1024 * 1024) return `${(num / 1024 / 1024).toFixed(1)} MB`
@@ -335,7 +335,7 @@ const getQualityOptions = (item) => {
   const formatFileSize = (input) => {
     if (typeof input === 'string') {
       const text = input.trim()
-      if (!text) return '大小未知'
+      if (!text) return 'Unknown size'
       if (/^\d+(\.\d+)?\s*(B|KB|MB|GB|TB)$/i.test(text)) return text.toUpperCase()
       if (/^(\d+\.?\d*)([KMGT])$/i.test(text)) {
         const m = text.match(/^(\d+\.?\d*)([KMGT])$/i)
@@ -353,7 +353,7 @@ const getQualityOptions = (item) => {
     }
 
     const num = Number(input)
-    if (!Number.isFinite(num) || num <= 0) return '大小未知'
+    if (!Number.isFinite(num) || num <= 0) return 'Unknown size'
     if (num < 1024) return `${num} B`
     if (num < 1024 * 1024) return `${(num / 1024).toFixed(1)} KB`
     if (num < 1024 * 1024 * 1024) return `${(num / 1024 / 1024).toFixed(1)} MB`
@@ -394,6 +394,7 @@ const parseDownloadFileName = (contentDisposition) => {
 const OnlineSearch = () => {
   const classes = useStyles()
   const notify = useNotify()
+  const translate = useTranslate()
 
   const [viewMode, setViewMode] = useState(VIEW_MODES.song)
   const [hasOpenedPlaylistView, setHasOpenedPlaylistView] = useState(false)
@@ -481,7 +482,7 @@ const OnlineSearch = () => {
       if (!navidromPlaylistId) {
         try {
           console.log('[playlist-sync] creating navidrome playlist', {
-            name: syncTask.title || '未命名歌单',
+            name: syncTask.title || 'Untitled playlist',
             comment: syncTask.playlistComment || '',
             playlistId: syncTask.playlistId,
             source: syncTask.source,
@@ -490,7 +491,7 @@ const OnlineSearch = () => {
           })
 
           const createPlaylistUrl = subsonic.url('createPlaylist', null, {
-            name: syncTask.title || '未命名歌单',
+            name: syncTask.title || 'Untitled playlist',
           })
           console.log('[playlist-sync] create playlist request url', {
             createPlaylistUrl,
@@ -581,7 +582,7 @@ const OnlineSearch = () => {
                 ? {
                   ...t,
                   navidromPlaylistId,
-                  currentSongTitle: '准备中',
+                  currentSongTitle: 'Preparing',
                 }
                 : t,
             ),
@@ -605,7 +606,7 @@ const OnlineSearch = () => {
                 ? {
                   ...t,
                   status: 'sync-error',
-                  currentSongTitle: '创建歌单失败',
+                  currentSongTitle: 'Failed to create playlist',
                 }
                 : t,
             ),
@@ -657,7 +658,7 @@ const OnlineSearch = () => {
               ? {
                 ...t,
                 status: 'sync-error',
-                currentSongTitle: '同步启动失败',
+                currentSongTitle: 'Failed to start sync',
               }
               : t,
           ),
@@ -892,7 +893,7 @@ const OnlineSearch = () => {
       }
 
       window.dispatchEvent(new Event(ONLINE_DOWNLOAD_TASK_CHANGED_EVENT))
-      notify('已加入服务器下载任务', 'info')
+      notify(translate('online.download.addedToServerQueue', { _: 'Added to server download queue' }), 'info')
       handleCloseDownloadDialog()
     } catch (error) {
       setDownloadErrorOpen(true)
@@ -906,14 +907,16 @@ const OnlineSearch = () => {
     <div className={classes.root}>
       <Title
         title={
-          'Navidrome - Online Search'
+          `Navidrome - ${translate('online.search.pageTitle', { _: 'Online Search' })}`
         }
       />
 
       {/* ── Mode switch bar with title ── */}
       <div className={classes.modeSwitchWrap}>
         <Typography key={viewMode} className={classes.modeTitle}>
-          {viewMode === VIEW_MODES.song ? '在线歌曲' : '在线歌单'}
+          {viewMode === VIEW_MODES.song
+            ? translate('online.mode.song', { _: 'Online Songs' })
+            : translate('online.mode.playlist', { _: 'Online Playlists' })}
         </Typography>
         <Button
           className={classes.modeSwitch}
@@ -931,7 +934,7 @@ const OnlineSearch = () => {
             className={`${classes.modeSwitchText} ${viewMode === VIEW_MODES.song ? classes.modeSwitchTextActive : ''
               }`}
           >
-            歌曲
+            {translate('online.mode.songShort', { _: 'Songs' })}
           </span>
           <span
             className={`${classes.modeSwitchText} ${viewMode === VIEW_MODES.playlist
@@ -939,7 +942,7 @@ const OnlineSearch = () => {
               : ''
               }`}
           >
-            歌单
+            {translate('online.mode.playlistShort', { _: 'Playlists' })}
           </span>
         </Button>
       </div>
@@ -970,19 +973,19 @@ const OnlineSearch = () => {
         PaperProps={{ className: classes.downloadDialogPaper }}
       >
         <DialogTitle className={classes.downloadDialogTitle}>
-          选择下载音质
+          {translate('online.download.pickQuality', { _: 'Select download quality' })}
           <Typography
             variant="body2"
             className={classes.downloadDialogSubtitle}
           >
-            {selectedItem?.name || '当前歌曲'}
+            {selectedItem?.name || translate('online.download.currentSong', { _: 'Current song' })}
           </Typography>
         </DialogTitle>
         <DialogContent>
           <div className={classes.downloadOptionList}>
             {qualityOptions.length === 0 ? (
               <Typography variant="body2" color="textSecondary">
-                当前歌曲没有可用音质信息
+                {translate('online.download.noQualityAvailable', { _: 'No quality information available for the current song' })}
               </Typography>
             ) : (
               qualityOptions.map((option) => (
@@ -1007,12 +1010,12 @@ const OnlineSearch = () => {
         PaperProps={{ className: classes.downloadDialogPaper }}
       >
         <DialogTitle className={classes.downloadDialogTitle}>
-          选择下载方式
+          {translate('online.download.pickMethod', { _: 'Select download method' })}
           <Typography
             variant="body2"
             className={classes.downloadDialogSubtitle}
           >
-            {selectedItem?.name || '当前歌曲'}
+            {selectedItem?.name || translate('online.download.currentSong', { _: 'Current song' })}
             {selectedQuality
               ? ` · ${QUALITY_META[selectedQuality]?.label || selectedQuality}`
               : ''}
@@ -1034,16 +1037,16 @@ const OnlineSearch = () => {
                 const displayName =
                   browserDownloadSourceName || selectedItem?.source || ''
                 const srcName = truncateSourceName(displayName)
-                if (!browserDownloadLoading) return '浏览器下载'
+                if (!browserDownloadLoading) return translate('online.download.browser', { _: 'Browser download' })
                 if (browserDownloadStatus === 'resolving')
-                  return srcName ? `${srcName} 解析中...` : '解析中...'
+                  return srcName ? `${srcName} ${translate('online.download.status.resolving', { _: 'Resolving' })}...` : `${translate('online.download.status.resolving', { _: 'Resolving' })}...`
                 if (browserDownloadStatus === 'downloading')
                   return browserDownloadProgress > 0
-                    ? `${srcName} 下载中 ${browserDownloadProgress}%`
-                    : `${srcName} 下载中...`
+                    ? `${srcName} ${translate('online.download.status.downloading', { _: 'Downloading' })} ${browserDownloadProgress}%`
+                    : `${srcName} ${translate('online.download.status.downloading', { _: 'Downloading' })}...`
                 if (browserDownloadStatus === 'completed')
-                  return `${srcName} 完成`
-                return `${srcName} 处理中...`
+                  return `${srcName} ${translate('online.download.status.completed', { _: 'Completed' })}`
+                return `${srcName} ${translate('online.download.status.processing', { _: 'Processing' })}...`
               })()}
             </Button>
             <Button
@@ -1058,10 +1061,10 @@ const OnlineSearch = () => {
             >
               {(() => {
                 const srcName = truncateSourceName(selectedItem?.source || '')
-                if (!serverDownloadLoading) return '服务器下载'
+                if (!serverDownloadLoading) return translate('online.download.server', { _: 'Server download' })
                 if (serverDownloadStatus === 'resolving')
-                  return srcName ? `${srcName} 解析中...` : '解析中...'
-                return `${srcName} 处理中...`
+                  return srcName ? `${srcName} ${translate('online.download.status.resolving', { _: 'Resolving' })}...` : `${translate('online.download.status.resolving', { _: 'Resolving' })}...`
+                return `${srcName} ${translate('online.download.status.processing', { _: 'Processing' })}...`
               })()}
             </Button>
           </div>
@@ -1074,11 +1077,11 @@ const OnlineSearch = () => {
         PaperProps={{ className: classes.downloadDialogPaper }}
       >
         <DialogTitle className={classes.downloadDialogTitle}>
-          解析失败
+          {translate('online.download.resolveFailed', { _: 'Resolution failed' })}
         </DialogTitle>
         <DialogContent>
           <Typography variant="body2">
-            当前启用的音源无法解析出可用的直链信息
+            {translate('online.download.resolveFailedHint', { _: 'The currently enabled source could not resolve a playable URL.' })}
           </Typography>
           <div className={classes.downloadOptionList}>
             <Button
@@ -1087,7 +1090,7 @@ const OnlineSearch = () => {
               className={classes.downloadOptionBtn}
               onClick={handleCloseDownloadErrorDialog}
             >
-              确定
+              {translate('ra.action.confirm', { _: 'OK' })}
             </Button>
           </div>
         </DialogContent>

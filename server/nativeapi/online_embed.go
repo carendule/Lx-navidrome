@@ -43,8 +43,8 @@ const onlineEmbedCoverTimeout = 8 * time.Second
 
 // onlineEmbedCoverMaxBytes caps the cover image size we accept
 // from upstream. The previous value of 8 MiB was too aggressive:
-// 网易云's HD album scans routinely serve 10-15 MiB JPEGs and
-// 咪咕's "原始封面" / Apple Music art often tops 20 MiB. The
+// NetEase Cloud Music's HD album scans routinely serve 10-15 MiB JPEGs and
+// Migu's original artwork / Apple Music art often tops 20 MiB. The
 // downstream path transcodes the image down to
 // onlineEmbedCoverEmbedMaxBytes (300 KB) before embedding, so
 // the in-memory size only matters for (a) the per-task disk
@@ -135,6 +135,11 @@ type onlineEmbedFailure struct {
 	Cause  error
 }
 
+const (
+	onlineEmbedReasonMetadataFailed = "online.error.embed_metadata_failed"
+	onlineEmbedReasonLyricFailed    = "online.error.embed_lyric_failed"
+)
+
 func (e *onlineEmbedFailure) Error() string {
 	if e == nil {
 		return ""
@@ -175,7 +180,7 @@ func strictOnlineEmbedDownloadedFile(
 	audioPath string,
 ) (string, error) {
 	if audioPath == "" {
-		return audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("audio path is empty"))
+		return audioPath, newOnlineEmbedFailure(onlineEmbedReasonMetadataFailed, fmt.Errorf("audio path is empty"))
 	}
 
 	embedMode := onlineEmbedMode()
@@ -186,42 +191,54 @@ func strictOnlineEmbedDownloadedFile(
 	// Strict success criteria: metadata is considered valid only when
 	// the three core tags and cover are all available. Any missing
 	// prerequisite fails the task early.
+	//
+	// Lyric is intentionally best-effort even in embedModeAll: pure
+	// instrumental tracks and source gaps are common, so "no lyric"
+	// must not fail the whole download task.
 	title := onlineEmbedFirstNonEmpty(songInfo, "name", "songName", "title")
 	artist := onlineEmbedFirstNonEmpty(songInfo, "singer", "singerName", "artist")
 	album := onlineEmbedFirstNonEmpty(songInfo, "albumName", "album", "albumname")
 	if strings.TrimSpace(title) == "" || strings.TrimSpace(artist) == "" || strings.TrimSpace(album) == "" {
-		return audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("required metadata missing: title/artist/album"))
+		return audioPath, newOnlineEmbedFailure(onlineEmbedReasonMetadataFailed, fmt.Errorf("required metadata missing: title/artist/album"))
 	}
 
 	coverURL := pickOnlineEmbedCoverURL(songInfo)
 	if strings.TrimSpace(coverURL) == "" {
-		return audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("cover url missing"))
+		return audioPath, newOnlineEmbedFailure(onlineEmbedReasonMetadataFailed, fmt.Errorf("cover url missing"))
 	}
 	coverRef := fetchAndPersistOnlineCover(ctx, downloadDir, embedID, songInfo)
 	defer onlineEmbedCleanupArtwork(downloadDir)
 	if coverRef == nil {
-		return audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("cover fetch failed"))
+		return audioPath, newOnlineEmbedFailure(onlineEmbedReasonMetadataFailed, fmt.Errorf("cover fetch failed"))
 	}
 
 	lyric := ""
 	if embedMode == embedModeAll {
 		lyric, _ = fetchOnlineEmbedLyric(ctx, candidate, songSource, songInfo, quality)
-		if strings.TrimSpace(lyric) == "" {
-			return audioPath, newOnlineEmbedFailure("歌词嵌入失败", fmt.Errorf("lyric fetch failed"))
-		}
 	}
 
 	_, finalPath, err := onlineEmbedDownloadMetadata(ctx, audioPath, songInfo, quality, coverRef, lyric)
+	finalPath, err = strictOnlineEmbedHandleResult(audioPath, finalPath, err)
 	if err != nil {
-		if finalPath == "" {
-			finalPath = audioPath
-		}
 		return finalPath, err
 	}
 	if finalPath == "" {
 		finalPath = audioPath
 	}
 	return finalPath, nil
+}
+
+func strictOnlineEmbedHandleResult(audioPath, finalPath string, err error) (string, error) {
+	if finalPath == "" {
+		finalPath = audioPath
+	}
+	if err == nil {
+		return finalPath, nil
+	}
+	if onlineEmbedFailureReason(err) == onlineEmbedReasonLyricFailed {
+		return finalPath, nil
+	}
+	return finalPath, err
 }
 
 // onlineEmbedArtworkRef is a small wrapper so the embed step can
@@ -782,7 +799,7 @@ func onlineEmbedDownloadMetadata(
 	cmdPath, err := ffmpegImpl.CmdPath()
 	if err != nil {
 		embedTrace(ctx, "download_metadata:ffmpeg-missing", "audio", audioPath, "err", err.Error())
-		return result, audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("ffmpeg missing: %w", err))
+		return result, audioPath, newOnlineEmbedFailure(onlineEmbedReasonMetadataFailed, fmt.Errorf("ffmpeg missing: %w", err))
 	}
 	embedTrace(ctx, "download_metadata:ffmpeg-found", "audio", audioPath, "cmd", cmdPath)
 
@@ -794,7 +811,7 @@ func onlineEmbedDownloadMetadata(
 	format, formatName := onlineEmbedSniffAudioFormat(audioPath)
 	if format == "" {
 		embedTrace(ctx, "download_metadata:format-unknown", "audio", audioPath, "hadCover", result.HadCover, "hadLyric", result.HadLyric)
-		return result, audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("unknown audio format"))
+		return result, audioPath, newOnlineEmbedFailure(onlineEmbedReasonMetadataFailed, fmt.Errorf("unknown audio format"))
 	}
 	embedTrace(ctx, "download_metadata:starting-ffmpeg", "audio", audioPath, "format", format, "hadCover", result.HadCover, "hadLyric", result.HadLyric)
 
@@ -922,17 +939,17 @@ func onlineEmbedDownloadMetadata(
 			retryStderr, retryErr := runFFmpeg(retryArgs)
 			if retryErr != nil {
 				embedTrace(ctx, "download_metadata:ffmpeg-retry-autodetect-failed", "audio", audioPath, "err", retryErr.Error(), "stderr", retryStderr)
-				return result, audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("ffmpeg failed: %w", retryErr))
+				return result, audioPath, newOnlineEmbedFailure(onlineEmbedReasonMetadataFailed, fmt.Errorf("ffmpeg failed: %w", retryErr))
 			}
 			embedTrace(ctx, "download_metadata:ffmpeg-retry-autodetect-ok", "audio", audioPath)
 		} else {
-			return result, audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("ffmpeg failed: %w", err))
+			return result, audioPath, newOnlineEmbedFailure(onlineEmbedReasonMetadataFailed, fmt.Errorf("ffmpeg failed: %w", err))
 		}
 	}
 	embedTrace(ctx, "download_metadata:ffmpeg-ok", "audio", audioPath)
 	if err := os.Rename(tmpPath, audioPath); err != nil {
 		embedTrace(ctx, "download_metadata:rename-failed", "audio", audioPath, "err", err.Error())
-		return result, audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("rename failed: %w", err))
+		return result, audioPath, newOnlineEmbedFailure(onlineEmbedReasonMetadataFailed, fmt.Errorf("rename failed: %w", err))
 	}
 	// Normalize the file extension for mp4/m4a content. The
 	// upstream script may have named the file with a .aac
@@ -950,7 +967,7 @@ func onlineEmbedDownloadMetadata(
 		newPath, renErr := onlineEmbedNormalizeM4AExtension(audioPath)
 		if renErr != nil {
 			embedTrace(ctx, "download_metadata:ext-rename-failed", "audio", audioPath, "err", renErr.Error())
-			return result, audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("extension rename failed: %w", renErr))
+			return result, audioPath, newOnlineEmbedFailure(onlineEmbedReasonMetadataFailed, fmt.Errorf("extension rename failed: %w", renErr))
 		} else if newPath != "" {
 			embedTrace(ctx, "download_metadata:ext-renamed", "from", audioPath, "to", newPath)
 			audioPath = newPath
@@ -969,7 +986,7 @@ func onlineEmbedDownloadMetadata(
 	if result.HadLyric {
 		if err := onlineEmbedWriteLyricContainer(ctx, format, audioPath, lyric); err != nil {
 			embedTrace(ctx, "download_metadata:lyric-rewrite-failed", "format", format, "audio", audioPath, "err", err.Error())
-			return result, audioPath, newOnlineEmbedFailure("歌词嵌入失败", err)
+			return result, audioPath, newOnlineEmbedFailure(onlineEmbedReasonLyricFailed, err)
 		} else {
 			embedTrace(ctx, "download_metadata:lyric-rewrite-ok", "format", format, "audio", audioPath, "lyricLen", len(lyric))
 		}
@@ -1345,7 +1362,7 @@ func embedOnlineServerDownloadMetadata(
 	embedTrace(context.Background(), "embed:server-entry-reached", "task", task.ID, "audio", audioPath, "quality", quality, "source", candidate.ID)
 	if audioPath == "" {
 		embedTrace(ctx, "server:no-audio-path", "task", task.ID)
-		return audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("audio path is empty"))
+		return audioPath, newOnlineEmbedFailure(onlineEmbedReasonMetadataFailed, fmt.Errorf("audio path is empty"))
 	}
 	embedTrace(ctx, "server:enter", "task", task.ID, "audio", audioPath, "quality", quality, "source", candidate.ID)
 	// Use a detached context (not the per-attempt ctx) so a
@@ -1421,13 +1438,13 @@ func embedOnlineBrowserTaskWithScript(
 	embedTrace(context.Background(), "embed:browser-entry-reached", "task", taskID, "songSource", songSource, "candidate", candidate.ID, "audio", audioPath, "quality", quality)
 	if audioPath == "" {
 		embedTrace(ctx, "browser:no-audio-path", "task", taskID)
-		return audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("audio path is empty"))
+		return audioPath, newOnlineEmbedFailure(onlineEmbedReasonMetadataFailed, fmt.Errorf("audio path is empty"))
 	}
 	embedTrace(ctx, "browser:enter", "task", taskID, "audio", audioPath, "source", candidate.ID)
 	if task == nil {
 		task = lookupOnlineDownloadTaskForEmbed(taskID)
 		if task == nil {
-			return audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("download task not found"))
+			return audioPath, newOnlineEmbedFailure(onlineEmbedReasonMetadataFailed, fmt.Errorf("download task not found"))
 		}
 	}
 	embedCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

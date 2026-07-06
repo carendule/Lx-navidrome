@@ -777,7 +777,7 @@ function isPlaylistNewSort(id, src) {
   var val = String(id || '').toLowerCase();
   if (!val) return false;
   if (val === 'new') return true;
-  // TX: 2=最新, KG: 7=最新
+  // TX: 2=newest, KG: 7=newest
   if (src === 'tx' && val === '2') return true;
   if (src === 'kg' && val === '7') return true;
   return false;
@@ -1711,19 +1711,19 @@ function groupTags(items, getGroupName, getTag) {
 }
 
 function wySortList() {
-  return [{ id: 'hot', name: '最热' }];
+  return [{ id: 'hot', name: 'Hottest' }];
 }
 function txSortList() {
-  return [{ id: '5', name: '最热' }, { id: '2', name: '最新' }];
+  return [{ id: '5', name: 'Hottest' }, { id: '2', name: 'Newest' }];
 }
 function kgSortList() {
-  return [{ id: '5', name: '推荐' }, { id: '6', name: '最热' }, { id: '7', name: '最新' }, { id: '3', name: '热藏' }, { id: '8', name: '飙升' }];
+  return [{ id: '5', name: 'Recommended' }, { id: '6', name: 'Hottest' }, { id: '7', name: 'Newest' }, { id: '3', name: 'Trending Collection' }, { id: '8', name: 'Rising' }];
 }
 function kwSortList() {
-  return [{ id: 'new', name: '最新' }, { id: 'hot', name: '最热' }];
+  return [{ id: 'new', name: 'Newest' }, { id: 'hot', name: 'Hottest' }];
 }
 function mgSortList() {
-  return [{ id: '15127315', name: '推荐' }];
+  return [{ id: '15127315', name: 'Recommended' }];
 }
 
 function fetchWYTags() {
@@ -1738,7 +1738,7 @@ function fetchWYTags() {
       return { id: item.name, name: item.name };
     });
     var hotTag = (hot.tags || []).map(function(item) { return { id: item.name, name: item.name }; });
-    if (hotTag.length) tags.unshift({ name: '热门', list: hotTag });
+    if (hotTag.length) tags.unshift({ name: 'Hot', list: hotTag });
     return { tags: tags, sortList: wySortList() };
   });
 }
@@ -1767,7 +1767,7 @@ function fetchTXTags() {
       var result = tagHtml.match(/data-id="(\w+)">(.+?)<\/a>/);
       if (result) hotTag.push({ id: String(result[1]), name: result[2] });
     });
-    if (hotTag.length) mapped.unshift({ name: '热门', list: hotTag });
+    if (hotTag.length) mapped.unshift({ name: 'Hot', list: hotTag });
     return { tags: mapped, sortList: txSortList() };
   });
 }
@@ -1790,7 +1790,7 @@ function fetchKGTags() {
         }),
       };
     });
-    if (hotTag.length) tags.unshift({ name: '热门', list: hotTag });
+    if (hotTag.length) tags.unshift({ name: 'Hot', list: hotTag });
     return { tags: tags, sortList: kgSortList() };
   });
 }
@@ -1816,7 +1816,7 @@ function fetchKWTags() {
     var hotTag = (((hotBody.data || [])[0] || {}).data || []).map(function(item) {
       return { id: String(item.id) + '-' + String(item.digest), name: item.name };
     });
-    if (hotTag.length) tags.unshift({ name: '热门', list: hotTag });
+    if (hotTag.length) tags.unshift({ name: 'Hot', list: hotTag });
     return { tags: tags, sortList: kwSortList() };
   });
 }
@@ -1839,13 +1839,13 @@ function fetchMGTags() {
     var hotTag = (((raw[0] || {}).content) || []).map(function(item) {
       return { id: String((item.texts || [])[1] || ''), name: String((item.texts || [])[0] || '') };
     }).filter(function(item) { return item.id && item.name; });
-    if (hotTag.length) tags.unshift({ name: '热门', list: hotTag });
+    if (hotTag.length) tags.unshift({ name: 'Hot', list: hotTag });
     return { tags: tags, sortList: mgSortList() };
   });
 }
 
 function fetchWYList() {
-  var cat = tagId || '全部';
+  var cat = tagId || 'All';
   var url = 'https://music.163.com/api/playlist/list?cat=' + encodeURIComponent(cat) + '&order=' + encodeURIComponent(sortId || 'hot') + '&limit=' + limit + '&offset=' + (limit * (page - 1)) + '&total=true';
   return makeRequest(url, { headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://music.163.com/' } }).then(function(r) {
     var body = r.body || {};
@@ -2294,9 +2294,9 @@ func (api *Router) onlineSearch(w http.ResponseWriter, r *http.Request) {
 		errMsg := err.Error()
 		if strings.Contains(strings.ToLower(errMsg), "econnreset") {
 			if source == "kg" {
-				errMsg = "当前网络无法连接酷狗搜索服务，请稍后重试或切换到网易/QQ/酷我源"
+				errMsg = "Cannot reach the Kugou search service from the current network. Please retry later or switch to NetEase/QQ/Kuwo."
 			} else {
-				errMsg = "当前网络连接不稳定，搜索服务暂时不可用，请稍后重试"
+				errMsg = "The network connection is unstable. Search is temporarily unavailable; please try again later."
 			}
 		}
 		log.Warn(r.Context(), "Online search failed", "source", source, "type", searchType, "name", name, "err", err)

@@ -12,10 +12,10 @@ package nativeapi
 // fallback case the user reported:
 //
 //   - Download from WY → songInfo.songmid = 108914
-//     (网易云's id)
+//     (WY platform ID)
 //   - Fall back to KW → KW receives 108914, treats it as
 //     a KW id, returns the lyric for a completely
-//     different song (王菀之 / 原来如此).
+//     different song.
 //   - Fall back to TX → TX receives 108914, has no song
 //     with that id in its own namespace, returns empty.
 //
@@ -115,14 +115,14 @@ func onlineLyricSearchQueryString(name, singer string) string {
 }
 
 // ---------------------------------------------------------------------------
-// wy (网易云) search → lyric
+// wy search -> lyric
 // ---------------------------------------------------------------------------
 
-// fetchOnlineLyricWYBySearch searches 网易云 for the song
+// fetchOnlineLyricWYBySearch searches wy for the song
 // by name+singer, then fetches the lyric for the first
 // candidate whose title+duration passes the matcher.
 //
-// 网易云's search API is the eapi endpoint
+// wy's search API is the eapi endpoint
 // `/api/search/song/list/page` (encrypted with the same
 // AES-128-ECB key the lyric endpoint uses). The response
 // shape is body.data.resources[].baseInfo.simpleSongData —
@@ -330,10 +330,10 @@ func onlineLyricSearchWYExtractFields(inner []byte) *onlineLyricSearchWYCandidat
 }
 
 // ---------------------------------------------------------------------------
-// tx (QQ 音乐) search → lyric
+// tx search -> lyric
 // ---------------------------------------------------------------------------
 
-// fetchOnlineLyricTXBySearch searches QQ 音乐 for the
+// fetchOnlineLyricTXBySearch searches tx for the
 // song by name+singer, then fetches the lyric for the
 // first matcher-acceptable candidate.
 //
@@ -512,14 +512,14 @@ func onlineLyricSearchTXExtractOne(elem []byte) *onlineLyricSearchTXCandidate {
 }
 
 // ---------------------------------------------------------------------------
-// kw (酷我) search → lyric
+// kw search -> lyric
 // ---------------------------------------------------------------------------
 
-// fetchOnlineLyricKWBySearch searches 酷我 for the song
+// fetchOnlineLyricKWBySearch searches kw for the song
 // by name+singer, then fetches the lyric for the first
 // matcher-acceptable candidate.
 //
-// 酷我's search API is the simplest of the three: GET
+// kw's search API is the simplest of the three: GET
 // http://search.kuwo.cn/r.s?all=<query>. The response
 // is a top-level JSON array. Each element has
 // MUSICRID (with the "MUSIC_" prefix), SONGNAME,
@@ -609,9 +609,7 @@ func onlineLyricSearchKWParseCandidates(body []byte) []onlineLyricSearchKWCandid
 
 func onlineLyricSearchKWExtractOne(elem []byte) *onlineLyricSearchKWCandidate {
 	rid := onlineLyricJSONStringFieldImpl(elem, "MUSICRID")
-	if strings.HasPrefix(rid, "MUSIC_") {
-		rid = strings.TrimPrefix(rid, "MUSIC_")
-	}
+	rid = strings.TrimPrefix(rid, "MUSIC_")
 	if rid == "" {
 		return nil
 	}

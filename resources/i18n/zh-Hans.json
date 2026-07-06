@@ -653,16 +653,170 @@
     "nameTemplateEmpty": "（已全部选用）",
     "nameTemplateNoneSelected": "（请从可用行拖入至少一个片段）",
     "nameTemplateHint": "提示：拖动片段在两行间移动；已选行顺序即文件名模板，松手后自动保存。",
+    "embedModeTitle": "元数据嵌入设置",
+    "embedModeHint": "请选择下载文件是否嵌入元数据及歌词",
+    "embedModeSaving": "保存中...",
+    "embedMode": {
+      "none": "不嵌入",
+      "metadata": "仅嵌入元数据",
+      "all": "嵌入元数据和歌词"
+    },
     "manageOrAdd": "添加",
     "enabled": "已启用",
     "healthy": "正常",
     "disable": "禁用",
     "enable": "启用",
     "search": {
+      "pageTitle": "在线搜索",
       "button": "搜索",
+      "placeholder": "搜索歌曲、歌手...",
+      "error": "搜索失败，请稍后重试",
+      "results": "条结果",
+      "resultsTitle": "搜索结果",
+      "noMatch": "未找到匹配结果",
+      "inputHint": "输入关键词开始搜索",
       "hotSearch": "热门搜索",
       "hotEmpty": "暂无热搜数据",
-      "refreshHot": "刷新热搜"
+      "refreshHot": "刷新热搜",
+      "types": {
+        "song": "歌曲",
+        "singer": "歌手",
+        "album": "专辑"
+      }
+    },
+    "mode": {
+      "song": "在线歌曲",
+      "playlist": "在线歌单",
+      "songShort": "歌曲",
+      "playlistShort": "歌单"
+    },
+    "sources": {
+      "wy": "网易云",
+      "tx": "QQ音乐",
+      "kg": "酷狗",
+      "kw": "酷我",
+      "mg": "咪咕"
+    },
+    "playlist": {
+      "searchPlaceholder": "搜索歌单...",
+      "refreshPlaylists": "刷新歌单",
+      "syncToNavidrome": "同步到 Navidrome",
+      "openOfficial": "打开官方歌单页面",
+      "idLabel": "歌单ID",
+      "titleFallback": "歌单",
+      "noDescription": "该歌单暂无简介",
+      "emptySongs": "暂无歌单歌曲",
+      "emptyRecommendations": "暂无推荐歌单",
+      "category": {
+        "all": "全部"
+      },
+      "unit": {
+        "songs": "首",
+        "plays": "次收听"
+      },
+      "sort": {
+        "recommended": "推荐",
+        "hottest": "最热",
+        "newest": "最新",
+        "trendingCollection": "热藏",
+        "rising": "飙升"
+      },
+      "error": {
+        "loadCategories": "歌单分类加载失败，请稍后重试",
+        "loadRecommendations": "歌单推荐加载失败，请稍后重试",
+        "missingId": "歌单缺少可用的 ID，无法加载详情",
+        "loadDetails": "歌单详情加载失败，请稍后重试",
+        "noSongsForSync": "未获取到歌单歌曲，无法同步",
+        "parseQualities": "无法解析歌单音质，请稍后重试"
+      },
+      "syncQuality": {
+        "title": "选择同步音质",
+        "hint": "该歌单支持以下音质，建议优先选择较高音质",
+        "fallbackHint": "如果选定音质下载失败，系统将自动降级至其他可用音质",
+        "confirm": "确认同步"
+      }
+    },
+    "songTable": {
+      "title": "歌曲标题",
+      "artist": "歌手",
+      "album": "专辑",
+      "duration": "时长",
+      "action": "操作"
+    },
+    "download": {
+      "title": "下载管理",
+      "tasksSuffix": "个任务",
+      "empty": "暂无下载任务",
+      "action": "下载",
+      "pickQuality": "选择下载音质",
+      "currentSong": "当前歌曲",
+      "noQualityAvailable": "当前歌曲没有可用音质信息",
+      "pickMethod": "选择下载方式",
+      "browser": "浏览器下载",
+      "server": "服务器下载",
+      "resolveFailed": "解析失败",
+      "resolveFailedHint": "当前启用的音源无法解析出可用的直链信息。",
+      "addedToServerQueue": "已加入服务器下载任务",
+      "unknownSong": "未知歌曲",
+      "unknownSource": "未知源",
+      "unknownArtist": "未知歌手",
+      "unknownTask": "未知任务",
+      "reusedFromLibrary": "已复用库内歌曲",
+      "reasonLabel": "原因",
+      "playlistSyncTask": "歌单同步任务",
+      "failedListTitle": "歌单同步失败列表",
+      "taskName": "任务",
+      "exportTime": "导出时间",
+      "index": "序号",
+      "songName": "歌曲名称",
+      "artist": "歌手",
+      "failedReason": "失败原因",
+      "remaining": "剩余",
+      "failedCount": "失败",
+      "noFailedSongs": "暂无失败歌曲明细",
+      "exportFailedList": "下载失败列表 txt",
+      "status": {
+        "queued": "排队中",
+        "resolving": "解析中",
+        "downloading": "下载中",
+        "completed": "已完成",
+        "failed": "失败",
+        "paused": "已暂停",
+        "canceled": "已取消",
+        "syncing": "同步中",
+        "error": "有错误",
+        "processing": "处理中"
+      }
+    },
+    "pagination": {
+      "total": "共",
+      "page": "第",
+      "prev": "上一页",
+      "next": "下一页",
+      "pageInput": "页码",
+      "go": "跳转"
+    },
+    "common": {
+      "unknownTitle": "未知标题"
+    },
+    "error": {
+      "unknown": "未知错误",
+      "embed_metadata_failed": "元数据嵌入失败",
+      "embed_lyric_failed": "歌词嵌入失败",
+      "no_available_source": "无可用解析源",
+      "download_network_interrupted": "下载网络中断",
+      "import_failed": "入库失败",
+      "add_to_playlist_failed": "入歌单失败",
+      "download_source_failed": "下载源失败"
+    },
+    "nameTemplate": {
+      "tokens": {
+        "song_title": "歌名",
+        "artist": "歌手",
+        "album": "专辑",
+        "source": "来源",
+        "quality": "音质"
+      }
     }
   },
   "downloadList": {

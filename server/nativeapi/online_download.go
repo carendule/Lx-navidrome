@@ -32,11 +32,11 @@ type onlineBrowserDownloadRequest struct {
 	SongInfo map[string]any `json:"songInfo"`
 	Quality  string         `json:"quality"`
 	// NameTemplate is the ordered list of chip tokens the user picked
-	// in the "下载命名设置" UI (e.g. ["歌名", "音质", "歌手"]). It is
+	// in the "Download Name Settings" UI (e.g. ["song_title", "quality", "artist"]). It is
 	// persisted to settings.json, so the frontend reads it back on
 	// mount and sends it with every download request. Empty list
 	// means "fall back to the default name" — the file name builder
-	// will substitute [歌名, 歌手] in that case so the filename
+	// will substitute [song_title, artist] in that case so the filename
 	// always has at least a name + singer component.
 	NameTemplate []string `json:"nameTemplate,omitempty"`
 }
@@ -54,9 +54,9 @@ type onlineBrowserDownloadProgressResponse struct {
 	Error     string `json:"error,omitempty"`
 	FileReady bool   `json:"fileReady"`
 	// SourceName is the human-readable name of the custom JS script that
-	// actually resolved the URL (e.g. "ikun[赞助][永久]"). It is set as
+	// actually resolved the URL (e.g. "ikun[sponsor][permanent]"). It is set as
 	// soon as the resolve phase succeeds, so the frontend can show
-	// "ikun[赞助]… 解析中…" before the file actually starts streaming.
+	// "ikun[sponsor]... resolving..." before the file actually starts streaming.
 	// Empty for built-in sources (wy/tx/kg/kw/mg) or if resolve failed.
 	SourceName string `json:"sourceName,omitempty"`
 }
@@ -110,7 +110,7 @@ type onlineDownloadTask struct {
 	// runOnlineDownloadTask receives the normalized map directly.
 	SongInfo map[string]any
 	// NameTemplate is the user-configured chip order from the
-	// "下载命名设置" panel. Stored on the task so async and fallback
+	// "Download Name Settings" panel. Stored on the task so async and fallback
 	// code paths can build the file name consistently even if the
 	// global settings change mid-download.
 	NameTemplate []string
@@ -420,7 +420,7 @@ process.stdin.on('end', async () => {
         registeredSources = safeData && safeData.sources ? safeData.sources : {};
         initResolve();
       } else if (eventName === 'updateAlert') {
-        initReject(new Error('发现新版本,需要更新'));
+		initReject(new Error('A new version was detected and requires an update'));
       }
     },
     on: (eventName, handler) => {
@@ -479,10 +479,11 @@ process.stdin.on('end', async () => {
     enumerable: true,
   });
 
-  // 脚本期望一个对象参数：{ action, source, info }。两个 action 共用
-  // 同一个 request 处理器：musicUrl 拿下载链接，lyric 拿歌词文本。
-  // 脚本如果不支持 lyric action，requestHandler 可能会抛错；我们对
-  // 这种情况做静默降级，由 Go 端把它当作"无歌词"处理。
+	// The script expects an object argument: { action, source, info }.
+	// Both actions share the same request handler: musicUrl resolves the
+	// download URL, lyric resolves lyric text.
+	// If the script does not support lyric action, requestHandler may throw;
+	// we silently downgrade and treat it as "no lyric" on the Go side.
   //
   // IMPORTANT: requestedAction and info MUST be declared
   // OUTSIDE the outer try block. In strict-mode JavaScript
@@ -511,14 +512,14 @@ process.stdin.on('end', async () => {
 
     await Promise.race([
       initPromise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('初始化超时，请确保脚本调用了 lx.send("inited", ...)')), 3000)),
+	new Promise((_, reject) => setTimeout(() => reject(new Error('Initialization timeout: ensure the script calls lx.send("inited", ...)')), 3000)),
     ]);
 
     if (!registeredSources || !registeredSources[payload.source]) {
-      throw new Error('当前脚本未声明支持该音源');
+	throw new Error('The current script does not declare support for this source');
     }
     if (typeof requestHandler !== 'function') {
-      throw new Error('当前脚本未注册 request 处理器');
+	throw new Error('The current script did not register a request handler');
     }
 
     if (allowUnsafe) {
@@ -573,12 +574,12 @@ process.stdin.on('end', async () => {
 
     if (!finalUrl || typeof finalUrl !== 'string') {
       console.error('[OnlineDownload] Invalid result:', JSON.stringify(dResult));
-      throw new Error('脚本未返回有效下载链接');
+	throw new Error('Script did not return a valid download URL');
     }
 
     finalUrl = String(finalUrl).trim();
     if (!finalUrl) {
-      throw new Error('脚本返回的下载链接为空');
+	throw new Error('Script returned an empty download URL');
     }
 
 		const normalizedHeaders = {};
@@ -976,11 +977,11 @@ func createOnlineServerDownloadTask(
 
 	title := stringValue(songInfo["name"])
 	if title == "" {
-		title = "未知标题"
+		title = "Unknown title"
 	}
 	artist := stringValue(songInfo["singer"])
 	if artist == "" {
-		artist = "未知歌手"
+		artist = "Unknown artist"
 	}
 
 	onlineDownloadTasks.Lock()
@@ -1028,7 +1029,7 @@ func runOnlineServerDownloadTask(taskID string) {
 		downloadDir = defaultOnlineDownloadPath()
 	}
 	if err := os.MkdirAll(downloadDir, 0o755); err != nil {
-		setOnlineDownloadTaskFailed(taskID, fmt.Errorf("创建下载目录失败: %w", err))
+		setOnlineDownloadTaskFailed(taskID, fmt.Errorf("failed to create download directory: %w", err))
 		return
 	}
 
@@ -1042,11 +1043,11 @@ func runOnlineServerDownloadTask(taskID string) {
 	// about than simply locking the order at task start.
 	candidates, err := loadEnabledSourcesForSong(songSource)
 	if err != nil {
-		setOnlineDownloadTaskFailed(taskID, fmt.Errorf("加载音源失败: %w", err))
+		setOnlineDownloadTaskFailed(taskID, fmt.Errorf("failed to load sources: %w", err))
 		return
 	}
 	if len(candidates) == 0 {
-		setOnlineDownloadTaskFailed(taskID, fmt.Errorf("未找到支持 %s 的启用音源脚本", songSource))
+		setOnlineDownloadTaskFailed(taskID, fmt.Errorf("no enabled source script supports %s", songSource))
 		return
 	}
 
@@ -1106,7 +1107,7 @@ func runOnlineServerDownloadTask(taskID string) {
 
 		resolvedURL, resolvedHeaders, sourceName, resolveErr := resolveOnlineDownloadURLWithProgress(attemptCtx, candidate, songSource, normalized, quality)
 		if resolveErr != nil {
-			attemptErrors = append(attemptErrors, fmt.Sprintf("%s 解析失败: %v", sourceName, resolveErr))
+			attemptErrors = append(attemptErrors, fmt.Sprintf("%s resolve failed: %v", sourceName, resolveErr))
 			log.Info(attemptCtx, "Online server download resolve failed, trying next candidate", "task", taskID, "candidate", sourceName, "err", resolveErr)
 			attemptCancel()
 			if ctx.Err() != nil {
@@ -1170,7 +1171,7 @@ func runOnlineServerDownloadTask(taskID string) {
 			publishedPath, publishErr := moveDownloadedFileToFinalPath(finalPath, task.FilePath)
 			if publishErr != nil {
 				_ = os.Remove(finalPath)
-				setOnlineDownloadTaskFailed(taskID, fmt.Errorf("移动下载文件失败: %w", publishErr))
+				setOnlineDownloadTaskFailed(taskID, fmt.Errorf("failed to move downloaded file: %w", publishErr))
 				done = true
 				continue
 			}
@@ -1197,7 +1198,7 @@ func runOnlineServerDownloadTask(taskID string) {
 			continue
 		}
 
-		attemptErrors = append(attemptErrors, fmt.Sprintf("%s 下载失败: %v", sourceName, fetchErr))
+		attemptErrors = append(attemptErrors, fmt.Sprintf("%s download failed: %v", sourceName, fetchErr))
 		log.Warn(attemptCtx, "Online server download failed, trying next candidate", "task", taskID, "candidate", sourceName, "err", fetchErr)
 
 		// Strip the orphaned .part file so the next candidate starts
@@ -1211,7 +1212,7 @@ func runOnlineServerDownloadTask(taskID string) {
 	}
 
 	if !done {
-		setOnlineDownloadTaskFailed(taskID, fmt.Errorf("所有启用音源均解析或下载失败: %s", strings.Join(attemptErrors, "; ")))
+		setOnlineDownloadTaskFailed(taskID, fmt.Errorf("all enabled sources failed to resolve or download: %s", strings.Join(attemptErrors, "; ")))
 	}
 }
 
@@ -1840,7 +1841,7 @@ func resolveOnlineDownloadURL(ctx context.Context, songSource string, songInfo m
 		return "", "", nil, err
 	}
 	if len(sources) == 0 {
-		return "", "", nil, fmt.Errorf("未找到支持 %s 的启用音源脚本", songSource)
+		return "", "", nil, fmt.Errorf("no enabled source script supports %s", songSource)
 	}
 
 	var attemptErrors []string
@@ -1893,7 +1894,7 @@ func resolveOnlineDownloadURLWithProgress(
 	scriptPath := filepath.Join(onlineScriptsDir(), source.ID)
 	scriptContent, err := os.ReadFile(scriptPath)
 	if err != nil {
-		return "", nil, "", fmt.Errorf("读取脚本失败: %w", err)
+		return "", nil, "", fmt.Errorf("failed to read script: %w", err)
 	}
 
 	var lastErr error
@@ -1910,7 +1911,7 @@ func resolveOnlineDownloadURLWithProgress(
 		if resolveErr == nil {
 			return url, headers, source.Name, nil
 		}
-		lastErr = fmt.Errorf("第%d次: %w", attempt, resolveErr)
+		lastErr = fmt.Errorf("attempt %d: %w", attempt, resolveErr)
 		if ctx.Err() != nil {
 			break
 		}
@@ -2086,22 +2087,22 @@ func bestOnlineDownloadQuality(songInfo map[string]any) string {
 // for the given chip token, or "" if the token is unknown or the
 // song info doesn't carry that field. The mapping is:
 //
-//	歌名   → songInfo["name"]
-//	歌手   → songInfo["singer"]
-//	专辑   → songInfo["albumName"]
-//	来源   → sourceLabel(songInfo["source"])  (wy→网易, etc.)
-//	音质   → the explicit quality argument
+//	song_title → songInfo["name"]
+//	artist     → songInfo["singer"]
+//	album      → songInfo["albumName"]
+//	source     → sourceLabel(songInfo["source"])  (wy->NetEase, etc.)
+//	quality    → the explicit quality argument
 func resolveNameTemplateToken(token string, songInfo map[string]any, quality string) string {
-	switch token {
-	case "歌名":
+	switch normalizeNameTemplateToken(token) {
+	case "song_title":
 		return stringValue(songInfo["name"])
-	case "歌手":
+	case "artist":
 		return stringValue(songInfo["singer"])
-	case "专辑":
+	case "album":
 		return stringValue(songInfo["albumName"])
-	case "来源":
+	case "source":
 		return sourceLabel(stringValue(songInfo["source"]))
-	case "音质":
+	case "quality":
 		return quality
 	default:
 		return ""
@@ -2114,25 +2115,25 @@ func resolveNameTemplateToken(token string, songInfo map[string]any, quality str
 func sourceLabel(source string) string {
 	switch strings.ToLower(strings.TrimSpace(source)) {
 	case "wy":
-		return "网易"
+		return "NetEase"
 	case "tx":
 		return "QQ"
 	case "kg":
-		return "酷狗"
+		return "Kugou"
 	case "kw":
-		return "酷我"
+		return "Kuwo"
 	case "mg":
-		return "咪咕"
+		return "Migu"
 	}
 	return source
 }
 
 // onlineDownloadFileName composes the on-disk file name for a
 // downloaded song. The user-configurable `nameTemplate` controls the
-// order of the parts (e.g. [歌名, 音质, 歌手] → "海屿你-320k-马也_Crabbit"),
+// order of the parts (e.g. [song_title, quality, artist] -> "Song-320k-Artist"),
 // separated by '-'. Tokens whose value is missing are silently
 // dropped so the filename never has dangling separators. An empty
-// or invalid template falls back to the default [歌名, 歌手] order.
+// or invalid template falls back to the default [song_title, artist] order.
 //
 // The file extension is taken from the resolved URL's path (or
 // Content-Type detection downstream) and is NOT part of the
@@ -2189,14 +2190,11 @@ func onlineDownloadFileName(songInfo map[string]any, quality string, nameTemplat
 // frontend request can't accidentally include garbage tokens that
 // would make the filename look weird.
 func sanitizeNameTemplate(in []string) []string {
-	allowed := map[string]bool{
-		"歌名": true, "歌手": true, "专辑": true, "来源": true, "音质": true,
-	}
 	seen := make(map[string]bool, len(in))
 	out := make([]string, 0, len(in))
 	for _, raw := range in {
-		token := strings.TrimSpace(raw)
-		if !allowed[token] || seen[token] {
+		token := normalizeNameTemplateToken(raw)
+		if token == "" || seen[token] {
 			continue
 		}
 		seen[token] = true
@@ -2348,17 +2346,17 @@ func runOnlineDownloadTask(taskID string, songSource string, normalized map[stri
 
 	candidates, err := loadEnabledSourcesForSong(songSource)
 	if err != nil {
-		setOnlineDownloadTaskFailed(taskID, fmt.Errorf("加载音源失败: %w", err))
+		setOnlineDownloadTaskFailed(taskID, fmt.Errorf("failed to load sources: %w", err))
 		return
 	}
 	if len(candidates) == 0 {
-		setOnlineDownloadTaskFailed(taskID, fmt.Errorf("未找到支持 %s 的启用音源脚本", songSource))
+		setOnlineDownloadTaskFailed(taskID, fmt.Errorf("no enabled source script supports %s", songSource))
 		return
 	}
 
 	// markResolving transitions the task into the "resolving" state with
 	// the given candidate's display name. Called once per candidate so the
-	// UI can show "ikun[赞助]… 解析中…" / "wyymusic… 解析中…" as we cycle
+	// UI can show "ikun[sponsor]... resolving..." / "wyymusic... resolving..." as we cycle
 	// through fallbacks.
 	markResolving := func(displayName string) {
 		updateOnlineDownloadTask(taskID, func(task *onlineDownloadTask) {
@@ -2384,7 +2382,7 @@ func runOnlineDownloadTask(taskID string, songSource string, normalized map[stri
 
 		resolvedURL, resolvedHeaders, sourceName, resolveErr := resolveOnlineDownloadURLWithProgress(ctx, candidate, songSource, normalized, quality)
 		if resolveErr != nil {
-			attemptErrors = append(attemptErrors, fmt.Sprintf("%s 解析失败: %v", sourceName, resolveErr))
+			attemptErrors = append(attemptErrors, fmt.Sprintf("%s resolve failed: %v", sourceName, resolveErr))
 			log.Info(ctx, "Online browser download resolve failed, trying next candidate", "task", taskID, "candidate", sourceName, "err", resolveErr)
 			if ctx.Err() != nil {
 				setOnlineDownloadTaskFailed(taskID, ctx.Err())
@@ -2461,7 +2459,11 @@ func runOnlineDownloadTask(taskID string, songSource string, normalized map[stri
 				task.Received = result.Size
 				task.Total = result.Size
 				task.FilePath = finalPath
-				task.FileName = filepath.Base(finalPath)
+				// Keep the user-facing download name from the configured
+				// template. finalPath is a temporary staging path and may
+				// be `nd-online-download-*`, which should never leak to the
+				// browser's downloaded filename.
+				task.FileName = result.FileName
 				task.ContentType = result.ContentType
 			})
 			broadcastDownloadTaskChange()
@@ -2475,7 +2477,7 @@ func runOnlineDownloadTask(taskID string, songSource string, normalized map[stri
 			return
 		}
 
-		attemptErrors = append(attemptErrors, fmt.Sprintf("%s 下载失败: %v", sourceName, fetchErr))
+		attemptErrors = append(attemptErrors, fmt.Sprintf("%s download failed: %v", sourceName, fetchErr))
 		log.Warn(ctx, "Online browser download failed, trying next candidate", "task", taskID, "candidate", sourceName, "err", fetchErr)
 
 		// Strip any orphaned .part file from the failed attempt so the
@@ -2485,7 +2487,7 @@ func runOnlineDownloadTask(taskID string, songSource string, normalized map[stri
 		_ = i
 	}
 
-	setOnlineDownloadTaskFailed(taskID, fmt.Errorf("所有启用音源均解析或下载失败: %s", strings.Join(attemptErrors, "; ")))
+	setOnlineDownloadTaskFailed(taskID, fmt.Errorf("all enabled sources failed to resolve or download: %s", strings.Join(attemptErrors, "; ")))
 }
 
 type fetchedOnlineTempFile struct {

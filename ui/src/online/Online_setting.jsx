@@ -166,23 +166,19 @@ const useStyles = makeStyles((theme) => ({
   saveButtonWrap: {
     marginBottom: theme.spacing(2),
   },
-  // 嵌入设置分区的描述文字：放在标题下方，三个 Radio 之上。
-  // 复用 templateHint 的字号但放宽宽度限制以容纳更长的句子。
+  // Embed settings description shown under the section title.
   embedHint: {
     color: theme.palette.text.secondary,
     marginBottom: theme.spacing(1.5),
   },
-  // Radio 行容器：在窄屏自动换行，并保证三个 Radio 之间有可见的
-  // 间距（gap: 2 → 16px），让它们看起来不像挤在一起。
+  // Radio option row with wrapping on small screens.
   embedOptionRow: {
     display: 'flex',
     flexWrap: 'wrap',
     gap: theme.spacing(2),
     marginBottom: theme.spacing(1.5),
   },
-  // 单个 Radio 容器：加底色 + 圆角让整行像一个 segmented control。
-  // 横向内边距放大到 1.6 (≈12.8px) 让 Radio 圆圈和文字之间也有
-  // 留白；选中态由 FormControlLabel 的 primary color 自动着色。
+  // Single radio option style.
   embedOption: {
     border: `1px solid ${theme.palette.divider}`,
     borderRadius: 8,
@@ -190,7 +186,7 @@ const useStyles = makeStyles((theme) => ({
     backgroundColor: 'transparent',
     transition: 'background-color 0.15s, border-color 0.15s',
   },
-  // 提交按钮旁的 “保存中…” spinner / 文案占位，避免布局跳动。
+  // Saving indicator next to submit action.
   embedSaving: {
     marginLeft: theme.spacing(1),
     color: theme.palette.text.secondary,
@@ -316,11 +312,11 @@ const useStyles = makeStyles((theme) => ({
 
 const tagColor = (theme, tag) => {
   const map = {
-    网易: { bg: '#fde2e2', color: '#a13030' },
-    QQ: { bg: '#d7f6e8', color: '#1f7a53' },
-    酷我: { bg: '#fdeccf', color: '#935b00' },
-    酷狗: { bg: '#dfe8ff', color: '#2c4ca3' },
-    咪咕: { bg: '#ffe1ea', color: '#a3335d' },
+    wy: { bg: '#fde2e2', color: '#a13030' },
+    tx: { bg: '#d7f6e8', color: '#1f7a53' },
+    kw: { bg: '#fdeccf', color: '#935b00' },
+    kg: { bg: '#dfe8ff', color: '#2c4ca3' },
+    mg: { bg: '#ffe1ea', color: '#a3335d' },
     git: {
       bg: theme.palette.action.selected,
       color: theme.palette.text.primary,
@@ -338,12 +334,30 @@ const tagColor = (theme, tag) => {
   )
 }
 
-const sourceCodeMap = {
-  kg: '网易',
-  tx: 'QQ',
-  wy: '酷我',
-  kw: '酷狗',
-  mg: '咪咕',
+const sourceCodeToLocaleKey = {
+  kg: 'kg',
+  tx: 'tx',
+  wy: 'wy',
+  kw: 'kw',
+  mg: 'mg',
+}
+
+const tokenLabel = (token, translate) => {
+  const key = `online.nameTemplate.tokens.${token}`
+  switch (token) {
+    case 'song_title':
+      return translate(key, { _: 'Song title' })
+    case 'artist':
+      return translate(key, { _: 'Artist' })
+    case 'album':
+      return translate(key, { _: 'Album' })
+    case 'source':
+      return translate(key, { _: 'Source' })
+    case 'quality':
+      return translate(key, { _: 'Quality' })
+    default:
+      return token
+  }
 }
 
 // shallowEqualStringArray is used by the name-template auto-save
@@ -369,15 +383,14 @@ const shallowEqualStringArray = (a, b) => {
 // `online.embedMode.<mode>` key (e.g. the user is running the
 // embedded Chinese-only build with a translation key dropped from
 // the active locale). The Chinese labels match the user-requested
-// wording for the panel: 不嵌入 / 仅嵌入元数据 / 嵌入元数据和歌词.
 const embedModeDefaultLabel = (mode) => {
   switch (mode) {
     case 'none':
-      return '不嵌入'
+      return 'Do not embed'
     case 'metadata':
-      return '仅嵌入元数据'
+      return 'Embed metadata only'
     case 'all':
-      return '嵌入元数据和歌词'
+      return 'Embed metadata and lyrics'
     default:
       return mode
   }
@@ -392,7 +405,7 @@ const OnlineSetting = () => {
   const [downloadPath, setDownloadPath] = React.useState('')
   const [savingDownloadPath, setSavingDownloadPath] = React.useState(false)
   // nameTemplate: chips the user has selected for the download
-  // filename template (saved to settings). Defaults to [歌名, 歌手].
+  // filename template (saved to settings). Defaults to [song title, artist].
   // The "available" row is derived as NAME_TEMPLATE_TOKENS minus
   // nameTemplate, so there is exactly one source of truth.
   const [nameTemplate, setNameTemplate] = React.useState(
@@ -502,7 +515,7 @@ const OnlineSetting = () => {
         body: JSON.stringify({ nameTemplate: template }),
         headers: new Headers({ 'Content-Type': 'application/json' }),
       }).catch(() => {
-        notify('下载命名顺序保存失败', 'warning')
+        notify('Failed to save filename template order', 'warning')
       })
     },
     [notify],
@@ -608,10 +621,10 @@ const OnlineSetting = () => {
         if (Array.isArray(json?.nameTemplate) && json.nameTemplate.length > 0) {
           setNameTemplate(json.nameTemplate)
         }
-        notify('下载路径已保存', 'info')
+        notify('Download path saved', 'info')
       })
       .catch(() => {
-        notify('下载路径保存失败', 'warning')
+        notify('Failed to save download path', 'warning')
       })
       .finally(() => {
         setSavingDownloadPath(false)
@@ -622,7 +635,7 @@ const OnlineSetting = () => {
   }, [downloadPath, notify])
 
   // handleEmbedModeChange is the radio onChange callback for the
-  // "元数据嵌入设置" section. The user-facing flow is:
+  // "Metadata embedding settings" section. The user-facing flow is:
   //
   //   1. User clicks a radio; we update the local state immediately
   //      so the UI feels instant (the radio flips before the network
@@ -653,10 +666,10 @@ const OnlineSetting = () => {
             setEmbedMode(persisted)
             embedModeRef.current = persisted
           }
-          notify('元数据嵌入设置已保存', 'info')
+          notify('Embedding settings saved', 'info')
         })
         .catch(() => {
-          notify('元数据嵌入设置保存失败', 'warning')
+          notify('Failed to save embedding settings', 'warning')
         })
         .finally(() => {
           setSavingEmbedMode(false)
@@ -862,10 +875,10 @@ const OnlineSetting = () => {
 
       if (!file.name.toLowerCase().endsWith('.js')) {
         // eslint-disable-next-line no-console
-        console.error('脚本解析失败: 仅支持 .js 文件', {
+        console.error('Script parse failed: only .js files are supported', {
           filename: file.name,
         })
-        notify('脚本解析失败', 'warning')
+        notify('Script parse failed', 'warning')
         return
       }
 
@@ -884,20 +897,20 @@ const OnlineSetting = () => {
 
           if (json && json.success === false) {
             if (json.disabledVM) {
-              notify(json.message || '服务器已禁用原生 VM 模式', 'warning')
+              notify(json.message || 'Native VM mode is disabled on the server', 'warning')
               return null
             }
             if (json.requireUnsafe && !allowUnsafeVM) {
               const confirmed = window.confirm(
                 json.message ||
-                '该脚本需要原生 VM 模式运行，可能存在安全风险，是否继续？',
+                'This script requires native VM mode and may introduce security risks. Continue?',
               )
               if (!confirmed) {
                 return null
               }
               return uploadScript(true)
             }
-            throw new Error(json.message || '脚本解析失败')
+            throw new Error(json.message || 'Script parse failed')
           }
 
           return json
@@ -914,7 +927,7 @@ const OnlineSetting = () => {
         notifyOnlineSourceStatusChanged()
       } catch (e) {
         // eslint-disable-next-line no-console
-        console.error('脚本解析失败', {
+        console.error('Script parse failed', {
           filename: file.name,
           message: e?.message,
           status: e?.status,
@@ -922,7 +935,7 @@ const OnlineSetting = () => {
           stack: e?.stack,
           error: e,
         })
-        notify('脚本解析失败', 'warning')
+        notify('Script parse failed', 'warning')
       }
     },
     [notify, notifyOnlineSourceStatusChanged],
@@ -986,7 +999,7 @@ const OnlineSetting = () => {
         })
         .catch(() => {
           loadSources()
-          notify('排序保存失败', 'warning')
+          notify('Failed to save source order', 'warning')
         })
     },
     [displaySources, loadSources, notify],
@@ -1277,13 +1290,13 @@ const OnlineSetting = () => {
           <MdLibraryMusic className={classes.titleIcon} size={20} />
           <Typography variant="h6">
             {translate('online.embedModeTitle', {
-              _: '元数据嵌入设置',
+              _: 'Metadata Embedding Settings',
             })}
           </Typography>
         </div>
         <Typography variant="body2" className={classes.embedHint}>
           {translate('online.embedModeHint', {
-            _: '请选择下载文件是否嵌入元数据及歌词',
+            _: 'Choose whether downloaded files should include metadata and lyrics',
           })}
         </Typography>
         <div className={classes.embedOptionRow}>
@@ -1304,7 +1317,7 @@ const OnlineSetting = () => {
         </div>
         {savingEmbedMode && (
           <Typography variant="caption" className={classes.embedSaving}>
-            {translate('online.embedModeSaving', { _: '保存中…' })}
+            {translate('online.embedModeSaving', { _: 'Saving...' })}
           </Typography>
         )}
       </div>
@@ -1320,7 +1333,7 @@ const OnlineSetting = () => {
         </div>
         <div className={classes.templateRow} data-template-row="available">
           <Typography variant="caption" className={classes.templateHint}>
-            {translate('online.nameTemplateAvailable', { _: '可用:' })}
+            {translate('online.nameTemplateAvailable', { _: 'Available:' })}
           </Typography>
           <div className={classes.templateChips}>
             {availableTemplate.map((clip, index) => (
@@ -1337,19 +1350,19 @@ const OnlineSetting = () => {
                 }
               >
                 <MdDragIndicator className={classes.templateChipIcon} />
-                <span className={classes.templateChipLabel}>{clip}</span>
+                <span className={classes.templateChipLabel}>{tokenLabel(clip, translate)}</span>
               </div>
             ))}
             {availableTemplate.length === 0 && (
               <Typography variant="caption" className={classes.templateEmpty}>
-                {translate('online.nameTemplateEmpty', { _: '（已全部选用）' })}
+                {translate('online.nameTemplateEmpty', { _: '(All selected)' })}
               </Typography>
             )}
           </div>
         </div>
         <div className={classes.templateRow} data-template-row="selected">
           <Typography variant="caption" className={classes.templateHint}>
-            {translate('online.nameTemplateSelected', { _: '已选:' })}
+            {translate('online.nameTemplateSelected', { _: 'Selected:' })}
           </Typography>
           <div className={classes.templateChips}>
             {nameTemplate.map((clip, index) => (
@@ -1366,13 +1379,13 @@ const OnlineSetting = () => {
                 }
               >
                 <MdDragIndicator className={classes.templateChipIcon} />
-                <span className={classes.templateChipLabel}>{clip}</span>
+                <span className={classes.templateChipLabel}>{tokenLabel(clip, translate)}</span>
               </div>
             ))}
             {nameTemplate.length === 0 && (
               <Typography variant="caption" className={classes.templateEmpty}>
                 {translate('online.nameTemplateNoneSelected', {
-                  _: '（请从可用行拖入至少一个片段）',
+                  _: '(Drag at least one token from available row)',
                 })}
               </Typography>
             )}
@@ -1380,7 +1393,7 @@ const OnlineSetting = () => {
         </div>
         <Typography variant="caption" className={classes.templateHintNote}>
           {translate('online.nameTemplateHint', {
-            _: '提示：拖动片段在两行间移动；已选行顺序即文件名模板，松手后自动保存。',
+            _: 'Tip: drag tokens between rows. Selected-row order is used as filename template and saved automatically.',
           })}
         </Typography>
       </div>
@@ -1392,7 +1405,7 @@ const OnlineSetting = () => {
         >
           <MdDragIndicator className={classes.templateChipIcon} />
           <span className={classes.templateChipLabel}>
-            {templateFloating.clip}
+            {tokenLabel(templateFloating.clip, translate)}
           </span>
         </div>
       )}
@@ -1491,14 +1504,17 @@ const OnlineSetting = () => {
 
                   <div className={classes.tags}>
                     {(item.supportedSources || []).map((tag) => {
-                      const displayTag = sourceCodeMap[tag] || tag
+                      const localeKey = sourceCodeToLocaleKey[tag]
+                      const displayTag = localeKey
+                        ? translate(`online.sources.${localeKey}`, { _: tag })
+                        : tag
                       return (
                         <Chip
                           key={tag}
                           size="small"
                           label={displayTag}
                           className={classes.tag}
-                          style={tagColor(theme, displayTag)}
+                          style={tagColor(theme, tag)}
                         />
                       )
                     })}

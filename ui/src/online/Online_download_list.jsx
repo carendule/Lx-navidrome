@@ -80,7 +80,7 @@ const useStyles = makeStyles((theme) => ({
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: theme.spacing(1),
-    flexWrap: 'nowrap',
+    flexWrap: 'wrap',
   },
   summaryText: {
     color: theme.palette.primary.main,
@@ -92,12 +92,23 @@ const useStyles = makeStyles((theme) => ({
     display: 'flex',
     alignItems: 'center',
     gap: theme.spacing(1),
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    minWidth: 0,
   },
   actionBtn: {
     textTransform: 'none',
     borderRadius: 999,
     color: theme.palette.text.secondary,
     borderColor: theme.palette.divider,
+    whiteSpace: 'nowrap',
+    paddingLeft: theme.spacing(1.2),
+    paddingRight: theme.spacing(1.2),
+    [theme.breakpoints.down('sm')]: {
+      fontSize: '0.75rem',
+      paddingLeft: theme.spacing(1),
+      paddingRight: theme.spacing(1),
+    },
   },
   taskList: {
     overflowY: 'auto',
@@ -200,17 +211,17 @@ const useStyles = makeStyles((theme) => ({
 
 const defaultTasks = []
 
-const statusLabel = {
-  queued: '排队中',
-  resolving: '解析中',
-  downloading: '下载中',
-  completed: '已完成',
-  failed: '失败',
-  paused: '已暂停',
-  canceled: '已取消',
-  syncing: '同步中',
-  'sync-completed': '已完成',
-  'sync-error': '有错误',
+const statusLabelKeys = {
+  queued: 'online.download.status.queued',
+  resolving: 'online.download.status.resolving',
+  downloading: 'online.download.status.downloading',
+  completed: 'online.download.status.completed',
+  failed: 'online.download.status.failed',
+  paused: 'online.download.status.paused',
+  canceled: 'online.download.status.canceled',
+  syncing: 'online.download.status.syncing',
+  'sync-completed': 'online.download.status.completed',
+  'sync-error': 'online.download.status.error',
 }
 
 const statusColor = {
@@ -244,7 +255,7 @@ const getDisplayStatus = (task) => {
 }
 
 // While a server download is in flight we show the *resolver script*
-// name (e.g. "ikun[赞助]…") instead of the static source code ("wy"),
+// name (e.g. "ikun[sponsor]…") instead of the static source code ("wy"),
 // because the user can see which candidate is currently being tried or
 // is being downloaded. Falls back to the source code when the script
 // name is missing (e.g. native wy/tx/kg/kw/mg paths, or pre-upgrade
@@ -257,38 +268,47 @@ const truncateSourceName = (name, max = 5) => {
   return `${name.slice(0, max)}...`
 }
 
-const formatInFlightLabel = (task) => {
+const formatInFlightLabel = (task, translate) => {
   const candidate = truncateSourceName(task?.sourceName || task?.source || '')
   if (!candidate) return ''
-  if (task.status === 'resolving') return `${candidate} 解析中...`
+  if (task.status === 'resolving') return `${candidate} ${translate('online.download.status.resolving', { _: 'Resolving' })}...`
   if (task.status === 'downloading') {
     const p = Math.max(0, Math.min(100, Number(task?.progress) || 0))
-    return p > 0 ? `${candidate} 下载中 ${p}%` : `${candidate} 下载中...`
+    return p > 0 ? `${candidate} ${translate('online.download.status.downloading', { _: 'Downloading' })} ${p}%` : `${candidate} ${translate('online.download.status.downloading', { _: 'Downloading' })}...`
   }
-  if (task.status === 'queued') return `${candidate} 排队中`
+  if (task.status === 'queued') return `${candidate} ${translate('online.download.status.queued', { _: 'Queued' })}`
   return candidate
 }
 
-const formatPlaylistSyncSubline = (task) => {
-  const songTitle = String(task?.currentSongTitle || task?.artist || '未知歌曲').trim()
+const formatPlaylistSyncSubline = (task, translate) => {
+  const songTitle = String(task?.currentSongTitle || task?.artist || translate('online.download.unknownSong', { _: 'Unknown song' })).trim()
   if (task?.currentSongReused) {
-    return `${songTitle} 已复用库内歌曲`
+    return `${songTitle} ${translate('online.download.reusedFromLibrary', { _: 'reused from library' })}`
   }
   const sourceLabel = truncateSourceName(
-    String(task?.sourceName || task?.source || '未知源').trim(),
+    String(task?.sourceName || task?.source || translate('online.download.unknownSource', { _: 'Unknown source' })).trim(),
     5,
   )
-  if (task.status === 'syncing') return `${songTitle} ${sourceLabel} 同步中...`.trim()
-  if (task.status === 'resolving') return `${songTitle} ${sourceLabel} 解析中...`.trim()
-  if (task.status === 'downloading') return `${songTitle} ${sourceLabel} 下载中...`.trim()
-  if (task.status === 'queued') return `${songTitle} ${sourceLabel} 排队中`
-  if (task.status === 'paused') return `${songTitle} 已暂停`
-  if (task.status === 'sync-error') return `${songTitle} ${sourceLabel} 失败`
-  if (task.status === 'sync-completed') return `${songTitle} ${sourceLabel} 已完成`
+  if (task.status === 'syncing') return `${songTitle} ${sourceLabel} ${translate('online.download.status.syncing', { _: 'Syncing' })}...`.trim()
+  if (task.status === 'resolving') return `${songTitle} ${sourceLabel} ${translate('online.download.status.resolving', { _: 'Resolving' })}...`.trim()
+  if (task.status === 'downloading') return `${songTitle} ${sourceLabel} ${translate('online.download.status.downloading', { _: 'Downloading' })}...`.trim()
+  if (task.status === 'queued') return `${songTitle} ${sourceLabel} ${translate('online.download.status.queued', { _: 'Queued' })}`
+  if (task.status === 'paused') return `${songTitle} ${translate('online.download.status.paused', { _: 'Paused' })}`
+  if (task.status === 'sync-error') return `${songTitle} ${sourceLabel} ${translate('online.download.status.failed', { _: 'Failed' })}`
+  if (task.status === 'sync-completed') return `${songTitle} ${sourceLabel} ${translate('online.download.status.completed', { _: 'Completed' })}`
   return `${songTitle} ${sourceLabel}`.trim()
 }
 
-const normalizeFailedSongDetails = (task) => {
+const translateFailureReason = (reason, translate) => {
+  const code = String(reason || '').trim()
+  if (!code) return translate('online.error.unknown', { _: 'Unknown error' })
+  if (code.startsWith('online.')) {
+    return translate(code, { _: code })
+  }
+  return code
+}
+
+const normalizeFailedSongDetails = (task, translate) => {
   const details = Array.isArray(task?.failedSongDetails)
     ? task.failedSongDetails
     : []
@@ -296,8 +316,8 @@ const normalizeFailedSongDetails = (task) => {
     return details
       .map((item) => ({
         name: String(item?.name || '').trim(),
-        singer: String(item?.singer || '').trim() || '未知歌手',
-        reason: String(item?.reason || '').trim() || '未知错误',
+        singer: String(item?.singer || '').trim() || translate('online.download.unknownArtist', { _: 'Unknown artist' }),
+        reason: translateFailureReason(item?.reason, translate),
       }))
       .filter((item) => item.name)
   }
@@ -305,17 +325,17 @@ const normalizeFailedSongDetails = (task) => {
   return names
     .map((name) => ({
       name: String(name || '').trim(),
-      singer: '未知歌手',
-      reason: '未知错误',
+      singer: translate('online.download.unknownArtist', { _: 'Unknown artist' }),
+      reason: translate('online.error.unknown', { _: 'Unknown error' }),
     }))
     .filter((item) => item.name)
 }
 
-const formatSingleTaskFailedReason = (task, displayStatus) => {
+const formatSingleTaskFailedReason = (task, displayStatus, translate) => {
   if (task?.taskType === 'playlist_sync' || displayStatus !== 'failed') return ''
   const reason = String(task?.error || task?.reason || task?.message || '').trim()
-  if (!reason) return '原因: 下载失败'
-  return `原因: ${reason.replace(/\s+/g, ' ')}`
+  if (!reason) return `${translate('online.download.reasonLabel', { _: 'Reason' })}: ${translate('online.error.download_source_failed', { _: 'Download source failed' })}`
+  return `${translate('online.download.reasonLabel', { _: 'Reason' })}: ${translateFailureReason(reason.replace(/\s+/g, ' '), translate)}`
 }
 
 const DownloadList = ({
@@ -336,19 +356,19 @@ const DownloadList = ({
   const nextOrderRef = React.useRef(1)
   const [failedTask, setFailedTask] = React.useState(null)
 
-  const failedRows = React.useMemo(() => normalizeFailedSongDetails(failedTask), [failedTask])
+  const failedRows = React.useMemo(() => normalizeFailedSongDetails(failedTask, translate), [failedTask, translate])
 
   const handleDownloadFailedList = React.useCallback(() => {
     if (!failedTask) return
-    const rows = normalizeFailedSongDetails(failedTask)
-    const title = String(failedTask?.title || '歌单同步任务').trim()
+    const rows = normalizeFailedSongDetails(failedTask, translate)
+    const title = String(failedTask?.title || translate('online.download.playlistSyncTask', { _: 'Playlist sync task' })).trim()
     const lines = [
-      `歌单同步失败列表`,
-      `任务名称: ${title}`,
-      `导出时间: ${new Date().toLocaleString()}`,
+      `${translate('online.download.failedListTitle', { _: 'Playlist sync failed list' })}`,
+      `${translate('online.download.taskName', { _: 'Task' })}: ${title}`,
+      `${translate('online.download.exportTime', { _: 'Export time' })}: ${new Date().toLocaleString()}`,
       '',
-      '序号\t歌曲名称\t歌手\t失败原因',
-      ...rows.map((row, idx) => `${idx + 1}\t${row.name}\t${row.singer || '未知歌手'}\t${row.reason || '未知错误'}`),
+      `${translate('online.download.index', { _: 'No.' })}\t${translate('online.download.songName', { _: 'Song' })}\t${translate('online.download.artist', { _: 'Artist' })}\t${translate('online.download.failedReason', { _: 'Reason' })}`,
+      ...rows.map((row, idx) => `${idx + 1}\t${row.name}\t${row.singer || translate('online.download.unknownArtist', { _: 'Unknown artist' })}\t${row.reason || translate('online.error.unknown', { _: 'Unknown error' })}`),
     ]
     const txt = lines.join('\n')
     const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' })
@@ -361,7 +381,7 @@ const DownloadList = ({
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
-  }, [failedTask])
+  }, [failedTask, translate])
 
   const displayTasks = React.useMemo(() => {
     return Array.isArray(tasks) ? tasks : []
@@ -429,10 +449,10 @@ const DownloadList = ({
           <Box className={classes.header}>
             <Box className={classes.titleWrap}>
               <Typography variant="h6" className={classes.title}>
-                下载管理
+                {translate('online.download.title', { _: 'Downloads' })}
               </Typography>
               <Typography className={classes.subtitle}>
-                {totalSpeed} • {displayTasks.length} TASKS
+                {totalSpeed} • {displayTasks.length} {translate('online.download.tasksSuffix', { _: 'tasks' })}
               </Typography>
             </Box>
           </Box>
@@ -484,7 +504,7 @@ const DownloadList = ({
 
           <Box className={classes.taskList}>
             {displayTasks.length === 0 && (
-              <Box className={classes.empty}>暂无下载任务</Box>
+              <Box className={classes.empty}>{translate('online.download.empty', { _: 'No download tasks' })}</Box>
             )}
 
             {sortedTasks.map((task) => (
@@ -493,9 +513,9 @@ const DownloadList = ({
                 const isFailedPlaylistSyncTask =
                   isPlaylistSyncTask && task.status === 'sync-error'
                 const isToggleable = !isPlaylistSyncTask
-                const failedCount = normalizeFailedSongDetails(task).length
+                const failedCount = normalizeFailedSongDetails(task, translate).length
                 const displayStatus = getDisplayStatus(task)
-                const singleTaskFailedReason = formatSingleTaskFailedReason(task, displayStatus)
+                const singleTaskFailedReason = formatSingleTaskFailedReason(task, displayStatus, translate)
 
                 const handleTaskClick = () => {
                   if (isFailedPlaylistSyncTask) {
@@ -531,7 +551,7 @@ const DownloadList = ({
                                 {task.title}
                               </Typography>
                               <Typography className={classes.taskMeta} noWrap>
-                                {formatPlaylistSyncSubline(task)}
+                                {formatPlaylistSyncSubline(task, translate)}
                               </Typography>
                             </Box>
                           </Box>
@@ -545,8 +565,8 @@ const DownloadList = ({
 
                             <Typography className={classes.taskMeta} noWrap>
                               {inFlightStatuses.has(task.status) &&
-                                formatInFlightLabel(task)
-                                ? `${formatInFlightLabel(task)} · ${task.quality} · ${task.artist}`
+                                formatInFlightLabel(task, translate)
+                                ? `${formatInFlightLabel(task, translate)} · ${task.quality} · ${task.artist}`
                                 : `${task.source} · ${task.quality} · ${task.artist}`}
                             </Typography>
                           </>
@@ -556,7 +576,7 @@ const DownloadList = ({
                       <Box className={classes.rightMeta}>
                         <Chip
                           size="small"
-                          label={statusLabel[displayStatus] || '未知'}
+                          label={translate(statusLabelKeys[displayStatus] || 'online.error.unknown', { _: 'Unknown' })}
                           style={{
                             backgroundColor:
                               taskStatusColorMap[displayStatus] || '#999',
@@ -566,8 +586,8 @@ const DownloadList = ({
                         {task.taskType === 'playlist_sync' && (
                           <Typography className={classes.remainText}>
                             {task.status === 'sync-error'
-                              ? `失败: ${failedCount}首`
-                              : `剩余: ${Math.max(0, Number(task.remainingCount) || 0)}首`}
+                              ? `${translate('online.download.failedCount', { _: 'Failed' })}: ${failedCount}`
+                              : `${translate('online.download.remaining', { _: 'Remaining' })}: ${Math.max(0, Number(task.remainingCount) || 0)}`}
                           </Typography>
                         )}
                         {!!singleTaskFailedReason && (
@@ -601,15 +621,15 @@ const DownloadList = ({
             maxWidth="sm"
           >
             <DialogTitle>
-              歌单同步失败列表
+              {translate('online.download.failedListTitle', { _: 'Playlist sync failed list' })}
             </DialogTitle>
             <DialogContent dividers>
               <Typography variant="body2" color="textSecondary" gutterBottom>
-                {`任务: ${String(failedTask?.title || '未知任务')}`}
+                {`${translate('online.download.taskName', { _: 'Task' })}: ${String(failedTask?.title || translate('online.download.unknownTask', { _: 'Unknown task' }))}`}
               </Typography>
               {failedRows.length === 0 ? (
                 <Typography variant="body2" color="textSecondary">
-                  暂无失败歌曲明细
+                  {translate('online.download.noFailedSongs', { _: 'No failed song details' })}
                 </Typography>
               ) : (
                 <List dense>
@@ -617,7 +637,7 @@ const DownloadList = ({
                     <ListItem key={`${row.name}-${row.singer}-${index}`} divider>
                       <ListItemText
                         primary={`${index + 1}. ${row.name}`}
-                        secondary={`歌手: ${row.singer || '未知歌手'} · 失败原因: ${row.reason || '未知错误'}`}
+                        secondary={`${translate('online.download.artist', { _: 'Artist' })}: ${row.singer || translate('online.download.unknownArtist', { _: 'Unknown artist' })} · ${translate('online.download.failedReason', { _: 'Reason' })}: ${row.reason || translate('online.error.unknown', { _: 'Unknown error' })}`}
                       />
                     </ListItem>
                   ))}
@@ -626,7 +646,7 @@ const DownloadList = ({
             </DialogContent>
             <DialogActions>
               <Button onClick={() => setFailedTask(null)}>
-                关闭
+                {translate('ra.action.close', { _: 'Close' })}
               </Button>
               <Button
                 color="primary"
@@ -634,7 +654,7 @@ const DownloadList = ({
                 onClick={handleDownloadFailedList}
                 disabled={failedRows.length === 0}
               >
-                下载失败列表 txt
+                {translate('online.download.exportFailedList', { _: 'Export failed list (.txt)' })}
               </Button>
             </DialogActions>
           </Dialog>

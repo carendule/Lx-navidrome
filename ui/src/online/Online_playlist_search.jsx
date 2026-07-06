@@ -16,6 +16,7 @@ import {
     DialogTitle,
 } from '@material-ui/core'
 import { makeStyles } from '@material-ui/core/styles'
+import { useTranslate } from 'react-admin'
 import RefreshIcon from '@material-ui/icons/Refresh'
 import SearchIcon from '@material-ui/icons/Search'
 import ArrowBackIcon from '@material-ui/icons/ArrowBack'
@@ -33,12 +34,46 @@ import {
 } from './Online_constants'
 
 const SOURCES = [
-    { key: 'wy', label: '网易云' },
-    { key: 'tx', label: 'QQ音乐' },
-    { key: 'kg', label: '酷狗' },
-    { key: 'kw', label: '酷我' },
-    { key: 'mg', label: '咪咕' },
+    { key: 'wy' },
+    { key: 'tx' },
+    { key: 'kg' },
+    { key: 'kw' },
+    { key: 'mg' },
 ]
+
+const translateSourceName = (source, translate) => {
+    const fallback = (SOURCE_BADGE[source] || {}).name || String(source || '').toUpperCase()
+    return translate(`online.sources.${source}`, { _: fallback })
+}
+
+const translateSortLabel = (option, source, translate) => {
+    const key = String(option?.key || '').toLowerCase()
+    const label = String(option?.label || '').trim()
+
+    let token = ''
+    if (source === 'kg') {
+        if (key === '5') token = 'recommended'
+        else if (key === '6') token = 'hottest'
+        else if (key === '7') token = 'newest'
+        else if (key === '3') token = 'trendingCollection'
+        else if (key === '8') token = 'rising'
+    } else {
+        if (key === 'hot' || key === '5') token = 'hottest'
+        else if (key === 'new' || key === '2' || key === '7') token = 'newest'
+    }
+
+    if (!token && label) {
+        const lowered = label.toLowerCase()
+        if (lowered === 'hot' || lowered === 'hottest') token = 'hottest'
+        else if (lowered === 'new' || lowered === 'newest') token = 'newest'
+        else if (lowered === 'recommended') token = 'recommended'
+        else if (lowered === 'trending collection') token = 'trendingCollection'
+        else if (lowered === 'rising') token = 'rising'
+    }
+
+    if (!token) return label || key
+    return translate(`online.playlist.sort.${token}`, { _: label || key })
+}
 
 const darkenHexColor = (hex, amount = 8) => {
     if (typeof hex !== 'string' || !hex.startsWith('#')) return hex
@@ -536,26 +571,26 @@ const normalizePlaylistTagGroups = (raw) => {
 const normalizePlaylistSortOptions = (raw, source) => {
     const PLAYLIST_SORT_OPTIONS_BY_SOURCE = {
         wy: [
-            { key: 'hot', label: '最热' },
+            { key: 'hot', label: 'Hottest' },
         ],
         tx: [
-            { key: 'hot', label: '最热' },
-            { key: 'new', label: '最新' },
+            { key: 'hot', label: 'Hottest' },
+            { key: 'new', label: 'Newest' },
         ],
         kg: [
-            { key: '5', label: '推荐' },
-            { key: '6', label: '最热' },
-            { key: '7', label: '最新' },
-            { key: '3', label: '热藏' },
-            { key: '8', label: '飙升' },
+            { key: '5', label: 'Recommended' },
+            { key: '6', label: 'Hottest' },
+            { key: '7', label: 'Newest' },
+            { key: '3', label: 'Trending Collection' },
+            { key: '8', label: 'Rising' },
         ],
         kw: [
-            { key: 'new', label: '最新' },
-            { key: 'hot', label: '最热' },
+            { key: 'new', label: 'Newest' },
+            { key: 'hot', label: 'Hottest' },
         ],
         bd: [
-            { key: 'hot', label: '最热' },
-            { key: 'new', label: '最新' },
+            { key: 'hot', label: 'Hottest' },
+            { key: 'new', label: 'Newest' },
         ],
     }
     const getPlaylistSortOptions = (src) =>
@@ -586,7 +621,7 @@ const normalizePlaylistItem = (item, fallbackSource) => {
 
     return {
         id: String(item?.id || `${item?.name || 'playlist'}-${Math.random()}`),
-        name: item?.name || '未命名歌单',
+        name: item?.name || 'Untitled playlist',
         author: item?.author || '--',
         date: item?.time || '--',
         songCount: Number(item?.total) || 0,
@@ -602,7 +637,7 @@ const normalizeDetailSongItem = (item, fallbackSource) => {
     const normalized = {
         ...(item || {}),
         id: String(item?.id || `${item?.name || 'song'}-${Math.random()}`),
-        name: item?.name || '未知标题',
+        name: item?.name || 'Unknown title',
         singer: item?.singer || item?.artist || '--',
         albumName: item?.albumName || item?.album || '--',
         duration: item?.duration,
@@ -632,7 +667,7 @@ const normalizeDetailInfo = (info, fallbackPlaylist) => {
     }
 
     return {
-        name: info?.name || fallbackPlaylist?.name || '未命名歌单',
+        name: info?.name || fallbackPlaylist?.name || 'Untitled playlist',
         author: info?.author || fallbackPlaylist?.author || '--',
         desc: info?.desc || fallbackPlaylist?.desc || '',
         cover: info?.img || fallbackPlaylist?.cover || '',
@@ -666,6 +701,7 @@ const getPlaylistExternalUrl = (playlistId, source) => {
 
 const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePlaylistSyncTask }) => {
     const classes = useStyles()
+    const translate = useTranslate()
 
     const [source, setSource] = useState('wy')
     const [playlistQuery, setPlaylistQuery] = useState('')
@@ -674,7 +710,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
     const [playlistTagGroups, setPlaylistTagGroups] = useState([])
     const [playlistSelectedTags, setPlaylistSelectedTags] = useState({})
     const [playlistSortOptions, setPlaylistSortOptions] = useState([
-        { key: 'hot', label: '最热' },
+        { key: 'hot', label: 'Hottest' },
     ])
     const [playlistRecommendRaw, setPlaylistRecommendRaw] = useState([])
     const [playlistLoading, setPlaylistLoading] = useState(false)
@@ -716,7 +752,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
         const selectedCount = Object.values(playlistSelectedTags).filter(
             (v) => v && String(v).trim(),
         ).length
-        if (selectedCount === 0) return '全部'
+        if (selectedCount === 0) return translate('online.playlist.category.all', { _: 'All' })
         if (selectedCount === 1) {
             for (const group of playlistTagGroups) {
                 for (const tag of group.list || []) {
@@ -730,7 +766,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                 }
             }
         }
-        return `${selectedCount}个`
+        return `${selectedCount}`
     }
 
     // Load playlist metadata (tags & sort options)
@@ -764,12 +800,12 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                 setPlaylistTagGroups([])
                 setPlaylistSelectedTags({})
                 setPlaylistSortOptions([
-                    { key: 'hot', label: '最热' },
+                    { key: 'hot', label: 'Hottest' },
                 ])
                 setPlaylistMetaSource('')
                 setPlaylistSort('hot')
                 setPlaylistTotal(0)
-                setPlaylistError('歌单分类加载失败，请稍后重试')
+                setPlaylistError(translate('online.playlist.error.loadCategories', { _: 'Failed to load playlist categories. Please retry later.' }))
             }
         }
 
@@ -828,7 +864,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
             })
             .catch(() => {
                 if (cancelled) return
-                setPlaylistError('歌单推荐加载失败，请稍后重试')
+                setPlaylistError(translate('online.playlist.error.loadRecommendations', { _: 'Failed to load playlist recommendations. Please retry later.' }))
                 setPlaylistRecommendRaw([])
                 setPlaylistTotal(0)
             })
@@ -884,7 +920,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
             const currentPlaylistId = String(item.id || '').trim()
 
             if (!currentPlaylistId) {
-                setDetailError('歌单缺少可用的 ID，无法加载详情')
+                setDetailError(translate('online.playlist.error.missingId', { _: 'Playlist ID is missing. Unable to load details.' }))
                 return
             }
 
@@ -926,7 +962,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                     if (!isLoadMore) {
                         setDetailSongs([])
                     }
-                    setDetailError('歌单详情加载失败，请稍后重试')
+                    setDetailError(translate('online.playlist.error.loadDetails', { _: 'Failed to load playlist details. Please retry later.' }))
                 })
                 .finally(() => {
                     if (isLoadMore) {
@@ -951,7 +987,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
 
     const handleLoadMoreDetailSongs = useCallback(() => {
         if (!detailPlaylist || detailLoadingMore || detailLoading) return
-        // 检查是否已经加载了所有歌曲
+        // Check whether all songs have already been loaded.
         if (detailTotal > 0 && detailSongs.length >= detailTotal) return
         const nextPage = detailPage + 1
         const totalPages = Math.ceil(detailTotal / 30)
@@ -965,7 +1001,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
 
         const handleScroll = () => {
             const { scrollTop, scrollHeight, clientHeight } = detailScrollContainer
-            // 当滚动距离底部 < 500px 时触发加载
+            // Trigger load when the distance to bottom is under 500px.
             if (scrollHeight - scrollTop - clientHeight < 500) {
                 handleLoadMoreDetailSongs()
             }
@@ -1029,7 +1065,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
         try {
             const allSongs = await fetchAllPlaylistSongsForSync(detailPlaylist)
             if (!allSongs.length) {
-                setDetailError('未获取到歌单歌曲，无法同步')
+                setDetailError(translate('online.playlist.error.noSongsForSync', { _: 'No songs were fetched from this playlist. Sync cannot start.' }))
                 setSyncButtonLoading(false)
                 return
             }
@@ -1062,7 +1098,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
             setSelectedSyncQuality(sortedQualities[0]) // Default to best quality
 
             // Store sync data for later use
-            const playlistName = detailInfo?.name || detailPlaylist.name || '未命名歌单'
+            const playlistName = detailInfo?.name || detailPlaylist.name || 'Untitled playlist'
             const playlistDesc = detailInfo?.desc || detailPlaylist.desc || ''
             const playlistCover = detailInfo?.cover || detailPlaylist.cover || ''
             const currentSource = detailPlaylist.source || source
@@ -1081,11 +1117,11 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
             setSyncQualityDialogOpen(true)
             setSyncButtonLoading(false)
         } catch (error) {
-            console.error('准备歌单同步失败:', error)
-            setDetailError('无法解析歌单音质，请稍后重试')
+            console.error('Failed to prepare playlist sync:', error)
+            setDetailError(translate('online.playlist.error.parseQualities', { _: 'Unable to parse available playlist qualities. Please retry later.' }))
             setSyncButtonLoading(false)
         }
-    }, [detailPlaylist, detailInfo, source, syncButtonLoading, fetchAllPlaylistSongsForSync])
+    }, [detailPlaylist, detailInfo, source, syncButtonLoading, fetchAllPlaylistSongsForSync, translate])
 
     const handleConfirmSyncQuality = useCallback(async () => {
         if (!pendingSyncData || !selectedSyncQuality) return
@@ -1113,7 +1149,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                 status: 'syncing',
                 progress: 0,
                 remainingCount: detailTotal || detailSongs.length,
-                currentSongTitle: '创建歌单中',
+                currentSongTitle: 'Creating playlist',
                 playlistId: pendingSyncData.currentPlaylistId,
                 navidromPlaylistId: '',
                 sourceType: pendingSyncData.currentSource,
@@ -1178,7 +1214,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                             onClick={handleBackFromDetail}
                             className={classes.detailBackBtn}
                         >
-                            后退
+                            {translate('ra.action.back', { _: 'Back' })}
                         </Button>
                     </div>
 
@@ -1193,17 +1229,17 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                                 <div className={classes.detailMetaRow}>
                                     <div className={classes.detailMeta}>
                                         <Typography className={classes.detailTitle}>
-                                            {detailInfo?.name || detailPlaylist.name || '未命名歌单'}
+                                            {detailInfo?.name || detailPlaylist.name || 'Untitled playlist'}
                                         </Typography>
                                         <div className={classes.detailSubMeta}>
                                             <Typography variant="subtitle2" color="textSecondary">
                                                 {detailInfo?.author || detailPlaylist.author || '--'}
                                             </Typography>
                                             <Typography variant="body2" color="textSecondary">
-                                                {`${detailTotal || detailPlaylist.songCount || 0} 首歌曲`}
+                                                {`${detailTotal || detailPlaylist.songCount || 0} ${translate('online.playlist.unit.songs', { _: 'songs' })}`}
                                             </Typography>
                                             <Typography variant="body2" color="textSecondary">
-                                                {`${detailInfo?.playCountText || detailPlaylist.playCountText || '0'} 次收听`}
+                                                {`${detailInfo?.playCountText || detailPlaylist.playCountText || '0'} ${translate('online.playlist.unit.plays', { _: 'plays' })}`}
                                             </Typography>
                                         </div>
                                         <Typography
@@ -1213,12 +1249,12 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                                             href={detailPlaylistUrl || undefined}
                                             target={detailPlaylistUrl ? '_blank' : undefined}
                                             rel={detailPlaylistUrl ? 'noreferrer noopener' : undefined}
-                                            title={detailPlaylistUrl ? '打开官方歌单页面' : undefined}
+                                            title={detailPlaylistUrl ? translate('online.playlist.openOfficial', { _: 'Open official playlist page' }) : undefined}
                                         >
-                                            {`歌单ID：${detailPlaylist.id || '--'} (${(SOURCE_BADGE[detailPlaylist.source || source] || {}).name || (detailPlaylist.source || source || '').toUpperCase()})`}
+                                            {`${translate('online.playlist.idLabel', { _: 'Playlist ID' })}: ${detailPlaylist.id || '--'} (${translateSourceName(detailPlaylist.source || source, translate)})`}
                                         </Typography>
                                         <Typography className={classes.detailDesc} variant="body2">
-                                            {detailInfo?.desc || detailPlaylist.desc || '该歌单暂无简介'}
+                                            {detailInfo?.desc || detailPlaylist.desc || translate('online.playlist.noDescription', { _: 'No playlist description available' })}
                                         </Typography>
                                     </div>
                                     <Button
@@ -1229,7 +1265,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                                         disabled={syncButtonLoading}
                                     >
                                         <SyncIcon />
-                                        同步到Navidrome
+                                        {translate('online.playlist.syncToNavidrome', { _: 'Sync to Navidrome' })}
                                     </Button>
                                 </div>
                             </div>
@@ -1240,11 +1276,11 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                         <CardContent>
                             <div className={classes.resultStatus}>
                                 <Typography variant="subtitle2">
-                                    {`${detailInfo?.name || detailPlaylist.name || '歌单'} · ${detailSongs.length}/${detailTotal || detailPlaylist.songCount || 0} 首`}
+                                    {`${detailInfo?.name || detailPlaylist.name || translate('online.playlist.titleFallback', { _: 'Playlist' })} · ${detailSongs.length}/${detailTotal || detailPlaylist.songCount || 0}`}
                                 </Typography>
                                 <Chip
                                     size="small"
-                                    label={(SOURCE_BADGE[detailPlaylist.source || source] || {}).name}
+                                    label={translateSourceName(detailPlaylist.source || source, translate)}
                                     style={{
                                         backgroundColor: (SOURCE_BADGE[detailPlaylist.source || source] || {}).bg,
                                         color: (SOURCE_BADGE[detailPlaylist.source || source] || {}).color,
@@ -1261,11 +1297,11 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                             >
                                 <div className={classes.detailSongHeader}>
                                     <span className={classes.detailIdx}>#</span>
-                                    <span>歌曲</span>
-                                    <span className={classes.mobileHidden}>歌手</span>
-                                    <span className={classes.mobileHidden}>专辑</span>
-                                    <span className={`${classes.detailHeaderLeftCell} ${classes.mobileHidden}`}>时长</span>
-                                    <span className={classes.detailHeaderCenterCell}>操作</span>
+                                    <span>{translate('online.songTable.title', { _: 'Title' })}</span>
+                                    <span className={classes.mobileHidden}>{translate('online.songTable.artist', { _: 'Artist' })}</span>
+                                    <span className={classes.mobileHidden}>{translate('online.songTable.album', { _: 'Album' })}</span>
+                                    <span className={`${classes.detailHeaderLeftCell} ${classes.mobileHidden}`}>{translate('online.songTable.duration', { _: 'Duration' })}</span>
+                                    <span className={classes.detailHeaderCenterCell}>{translate('online.songTable.action', { _: 'Action' })}</span>
                                 </div>
 
                                 {detailLoading ? (
@@ -1275,7 +1311,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                                 ) : detailSongs.length === 0 ? (
                                     <div className={classes.emptyBox}>
                                         <Typography variant="body2">
-                                            {detailError || '暂无歌单歌曲'}
+                                            {detailError || translate('online.playlist.emptySongs', { _: 'No songs in this playlist' })}
                                         </Typography>
                                     </div>
                                 ) : (
@@ -1300,12 +1336,12 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                                                                 className={classes.detailSongName}
                                                                 title={song.name || ''}
                                                             >
-                                                                {song.name || '未知标题'}
+                                                                {song.name || translate('online.common.unknownTitle', { _: 'Unknown title' })}
                                                             </Typography>
                                                             <div className={classes.detailTagRow}>
                                                                 <Chip
                                                                     size="small"
-                                                                    label={sourceInfo.name}
+                                                                    label={translateSourceName(song.source || source, translate)}
                                                                     className={classes.detailTag}
                                                                     style={{
                                                                         backgroundColor: sourceInfo.bg,
@@ -1358,8 +1394,8 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                                                             onClick={() =>
                                                                 onOpenDownloadDialog && onOpenDownloadDialog(song)
                                                             }
-                                                            aria-label="下载"
-                                                            title="下载"
+                                                            aria-label={translate('online.download.action', { _: 'Download' })}
+                                                            title={translate('online.download.action', { _: 'Download' })}
                                                         >
                                                             <GetAppIcon fontSize="small" />
                                                         </IconButton>
@@ -1392,7 +1428,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                             className={classes.searchInput}
                             variant="outlined"
                             size="small"
-                            placeholder="搜索歌单..."
+                            placeholder={translate('online.playlist.searchPlaceholder', { _: 'Search playlists...' })}
                             value={playlistQuery}
                             onChange={(e) => setPlaylistQuery(e.target.value)}
                             onKeyDown={(e) => {
@@ -1412,7 +1448,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                             className={classes.searchBtn}
                             onClick={handleSearch}
                         >
-                            搜索
+                            {translate('online.search.button', { _: 'Search' })}
                         </Button>
                         <Select
                             className={`${classes.sortSelect} ${classes.selectControl}`}
@@ -1427,7 +1463,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                         >
                             {playlistSortOptions.map((opt) => (
                                 <MenuItem key={opt.key} value={opt.key}>
-                                    {opt.label}
+                                    {translateSortLabel(opt, source, translate)}
                                 </MenuItem>
                             ))}
                         </Select>
@@ -1439,7 +1475,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                         >
                             {SOURCES.map((s) => (
                                 <MenuItem key={s.key} value={s.key}>
-                                    {s.label}
+                                    {translateSourceName(s.key, translate)}
                                 </MenuItem>
                             ))}
                         </Select>
@@ -1484,12 +1520,12 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                             <div className={classes.resultStatus}>
                                 <Typography variant="subtitle2">
                                     {playlistAppliedQuery
-                                        ? `${playlistAppliedQuery} · ${playlistTotal || playlistItems.length} 个歌单`
+                                        ? `${playlistAppliedQuery} · ${playlistTotal || playlistItems.length} playlists`
                                         : `${getActivePlaylistCategoryLabel()}`}
                                 </Typography>
                                 <Chip
                                     size="small"
-                                    label={badge.name}
+                                    label={translateSourceName(source, translate)}
                                     style={{
                                         backgroundColor: badge.bg,
                                         color: badge.color,
@@ -1507,7 +1543,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                             ) : playlistItems.length === 0 ? (
                                 <div className={classes.emptyBox}>
                                     <Typography variant="body2">
-                                        {playlistError || '暂无推荐歌单'}
+                                        {playlistError || translate('online.playlist.emptyRecommendations', { _: 'No recommended playlists' })}
                                     </Typography>
                                 </div>
                             ) : (
@@ -1552,8 +1588,8 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                                                     <span>{item.date}</span>
                                                 </div>
                                                 <div className={classes.playlistMetricRow}>
-                                                    <span>{`${item.songCount} 首`}</span>
-                                                    <span>{`${item.playCountText || formatCompactCount(item.playCount)} 次收听`}</span>
+                                                    <span>{`${item.songCount}`}</span>
+                                                    <span>{`${item.playCountText || formatCompactCount(item.playCount)} ${translate('online.playlist.unit.plays', { _: 'plays' })}`}</span>
                                                 </div>
                                             </div>
                                         </Card>
@@ -1569,7 +1605,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
 
                             <div className={classes.paginationRow}>
                                 <Typography className={classes.paginationInfo}>
-                                    {`共 ${playlistTotal} 条 · 第 ${playlistPage} / ${playlistTotalPages} 页`}
+                                    {`${translate('online.pagination.total', { _: 'Total' })} ${playlistTotal} · ${translate('online.pagination.page', { _: 'Page' })} ${playlistPage} / ${playlistTotalPages}`}
                                 </Typography>
                                 <div className={classes.paginationControls}>
                                     <Button
@@ -1578,7 +1614,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                                         onClick={handlePrevPage}
                                         disabled={playlistLoading || playlistPage <= 1}
                                     >
-                                        上一页
+                                        {translate('online.pagination.prev', { _: 'Previous' })}
                                     </Button>
                                     <Button
                                         size="small"
@@ -1586,7 +1622,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                                         onClick={handleNextPage}
                                         disabled={playlistLoading || playlistPage >= playlistTotalPages}
                                     >
-                                        下一页
+                                        {translate('online.pagination.next', { _: 'Next' })}
                                     </Button>
                                     <TextField
                                         value={playlistJumpPageInput}
@@ -1596,7 +1632,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                                         variant="outlined"
                                         size="small"
                                         className={classes.jumpInput}
-                                        placeholder="页码"
+                                        placeholder={translate('online.pagination.pageInput', { _: 'Page' })}
                                         onKeyDown={(e) => {
                                             if (e.key === 'Enter') handleJumpPage()
                                         }}
@@ -1608,7 +1644,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                                         onClick={handleJumpPage}
                                         disabled={playlistLoading}
                                     >
-                                        跳转
+                                        {translate('online.pagination.go', { _: 'Go' })}
                                     </Button>
                                 </div>
                             </div>
@@ -1620,7 +1656,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                                     onClick={handleSearch}
                                     size="small"
                                 >
-                                    刷新歌单
+                                    {translate('online.playlist.refreshPlaylists', { _: 'Refresh Playlists' })}
                                 </Button>
                             </div>
                         </CardContent>
@@ -1635,10 +1671,10 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                 maxWidth="sm"
                 fullWidth
             >
-                <DialogTitle>选择同步音质</DialogTitle>
+                <DialogTitle>{translate('online.playlist.syncQuality.title', { _: 'Select sync quality' })}</DialogTitle>
                 <DialogContent style={{ paddingTop: 16 }}>
                     <Typography variant="body2" color="textSecondary" style={{ marginBottom: 16 }}>
-                        该歌单支持以下音质，建议优先选择较高音质
+                        {translate('online.playlist.syncQuality.hint', { _: 'This playlist supports the following qualities. Higher quality is recommended.' })}
                     </Typography>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1687,7 +1723,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                         color="textSecondary"
                         style={{ display: 'block', marginTop: 16 }}
                     >
-                        如果选定音质下载失败，系统将自动降级至其他可用音质
+                        {translate('online.playlist.syncQuality.fallbackHint', { _: 'If the selected quality fails, the system will automatically fall back to another available quality.' })}
                     </Typography>
 
                     <div style={{ display: 'flex', gap: 8, marginTop: 24, justifyContent: 'flex-end' }}>
@@ -1696,7 +1732,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                             onClick={handleCloseSyncQualityDialog}
                             disabled={syncButtonLoading}
                         >
-                            取消
+                            {translate('ra.action.cancel', { _: 'Cancel' })}
                         </Button>
                         <Button
                             variant="contained"
@@ -1704,7 +1740,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                             onClick={handleConfirmSyncQuality}
                             disabled={syncButtonLoading || !selectedSyncQuality}
                         >
-                            {syncButtonLoading ? <CircularProgress size={20} /> : '确认同步'}
+                            {syncButtonLoading ? <CircularProgress size={20} /> : translate('online.playlist.syncQuality.confirm', { _: 'Confirm Sync' })}
                         </Button>
                     </div>
                 </DialogContent>
