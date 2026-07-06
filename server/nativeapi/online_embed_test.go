@@ -11,9 +11,231 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
+
+func metadataArgsToMap(args []string) map[string]string {
+	out := map[string]string{}
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] != "-metadata" {
+			continue
+		}
+		pair := args[i+1]
+		eq := strings.IndexByte(pair, '=')
+		if eq <= 0 {
+			continue
+		}
+		out[pair[:eq]] = pair[eq+1:]
+	}
+	return out
+}
+
+func TestOnlineEmbedAppendTagMetadataArgsWritesRichFields(t *testing.T) {
+	args := []string{}
+	songInfo := map[string]any{
+		"name":        "回到过去",
+		"singer":      "周杰伦",
+		"albumName":   "The Era",
+		"albumArtist": "Various Artists",
+		"composer":    "周杰伦",
+		"genre":       "Pop",
+		"trackNumber": "3/12",
+		"discNumber":  "1/2",
+		"publishDate": "2010-03-01",
+		"bpm":         "96",
+		"language":    "zh",
+		"isrc":        "TW-A45-10-12345",
+		"copyright":   "JVR",
+		"comment":     "source-note",
+	}
+
+	onlineEmbedAppendTagMetadataArgs(&args, songInfo, "320k")
+	meta := metadataArgsToMap(args)
+
+	want := map[string]string{
+		"title":        "回到过去",
+		"artist":       "周杰伦",
+		"album":        "The Era",
+		"album_artist": "Various Artists",
+		"composer":     "周杰伦",
+		"genre":        "Pop",
+		"track":        "3/12",
+		"disc":         "1/2",
+		"date":         "2010",
+		"bpm":          "96",
+		"language":     "zh",
+		"isrc":         "TW-A45-10-12345",
+		"copyright":    "JVR",
+	}
+	for k, v := range want {
+		if got := meta[k]; got != v {
+			t.Fatalf("metadata %s mismatch: got=%q want=%q (all=%v)", k, got, v, meta)
+		}
+	}
+	if got := meta["comment"]; !strings.Contains(got, "source-note") || !strings.Contains(got, "Quality: 320k") {
+		t.Fatalf("comment should contain source note and quality, got %q", got)
+	}
+}
+
+func TestOnlineEmbedAppendTagMetadataArgsFallsBackToMeta(t *testing.T) {
+	args := []string{}
+	songInfo := map[string]any{
+		"meta": map[string]any{
+			"songName":   "安静",
+			"singerName": "周杰伦",
+			"albumName":  "范特西",
+			"year":       "2001",
+			"genre":      "Mandopop",
+			"track":      "5",
+			"disc":       "1",
+		},
+	}
+	onlineEmbedAppendTagMetadataArgs(&args, songInfo, "")
+	meta := metadataArgsToMap(args)
+
+	if meta["title"] != "安静" || meta["artist"] != "周杰伦" || meta["album"] != "范特西" {
+		t.Fatalf("meta fallback failed: %v", meta)
+	}
+	if meta["date"] != "2001" {
+		t.Fatalf("date fallback failed: got %q", meta["date"])
+	}
+	if meta["genre"] != "Mandopop" || meta["track"] != "5" || meta["disc"] != "1" {
+		t.Fatalf("extended fallback fields missing: %v", meta)
+	}
+}
+
+func TestOnlineEmbedNormalizeDateTag(t *testing.T) {
+	cases := map[string]string{
+		"2019-02-03":       "2019",
+		"2018/12/31":       "2018",
+		"release: 2020-01": "2020",
+		"发行于2021年":         "2021",
+		"4497":             "",
+		"unknown":          "",
+		"":                 "",
+	}
+	keys := make([]string, 0, len(cases))
+	for k := range cases {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, in := range keys {
+		if got := onlineEmbedNormalizeDateTag(in); got != cases[in] {
+			t.Fatalf("normalize date failed: in=%q got=%q want=%q", in, got, cases[in])
+		}
+	}
+}
+
+func TestOnlineEmbedNormalizeTrackOrDiscTag(t *testing.T) {
+	cases := map[string]string{
+		"1":       "1",
+		"01":      "1",
+		"03/12":   "3/12",
+		"8/":      "8",
+		"abc":     "",
+		"0":       "",
+		"1000":    "",
+		"12/0":    "12",
+		"12/9999": "12",
+	}
+	for in, want := range cases {
+		if got := onlineEmbedNormalizeTrackOrDiscTag(in); got != want {
+			t.Fatalf("normalize track/disc failed: in=%q got=%q want=%q", in, got, want)
+		}
+	}
+}
+
+func TestOnlineEmbedNormalizeBPMTag(t *testing.T) {
+	cases := map[string]string{
+		"96":  "96",
+		"020": "20",
+		"19":  "",
+		"301": "",
+		"96a": "",
+		"":    "",
+	}
+	for in, want := range cases {
+		if got := onlineEmbedNormalizeBPMTag(in); got != want {
+			t.Fatalf("normalize bpm failed: in=%q got=%q want=%q", in, got, want)
+		}
+	}
+}
+
+func TestOnlineEmbedAppendTagMetadataArgsRejectsInvalidExtendedValues(t *testing.T) {
+	args := []string{}
+	songInfo := map[string]any{
+		"name":      "Song",
+		"singer":    "Artist",
+		"albumName": "Album",
+		"year":      "4497",
+		"track":     "0",
+		"disc":      "x",
+		"bpm":       "999",
+	}
+	onlineEmbedAppendTagMetadataArgs(&args, songInfo, "")
+	meta := metadataArgsToMap(args)
+	if _, ok := meta["date"]; ok {
+		t.Fatalf("invalid year should not be written, got date=%q", meta["date"])
+	}
+	if _, ok := meta["track"]; ok {
+		t.Fatalf("invalid track should not be written, got track=%q", meta["track"])
+	}
+	if _, ok := meta["disc"]; ok {
+		t.Fatalf("invalid disc should not be written, got disc=%q", meta["disc"])
+	}
+	if _, ok := meta["bpm"]; ok {
+		t.Fatalf("invalid bpm should not be written, got bpm=%q", meta["bpm"])
+	}
+}
+
+func TestStrictOnlineEmbedDownloadedFileFailsWhenCoreMetadataMissing(t *testing.T) {
+	ctx := context.Background()
+	_, err := strictOnlineEmbedDownloadedFile(
+		ctx,
+		t.TempDir(),
+		"task-core-missing",
+		map[string]any{
+			"name": "OnlyTitle",
+			"img":  "https://example.com/cover.jpg",
+		},
+		onlineSource{ID: "wy"},
+		"wy",
+		"320k",
+		"/tmp/fake.mp3",
+	)
+	if err == nil {
+		t.Fatal("expected strict embed to fail when artist/album are missing")
+	}
+	if reason := onlineEmbedFailureReason(err); reason != "元数据嵌入失败" {
+		t.Fatalf("unexpected failure reason: %q (err=%v)", reason, err)
+	}
+}
+
+func TestStrictOnlineEmbedDownloadedFileFailsWhenCoverMissing(t *testing.T) {
+	ctx := context.Background()
+	_, err := strictOnlineEmbedDownloadedFile(
+		ctx,
+		t.TempDir(),
+		"task-cover-missing",
+		map[string]any{
+			"name":      "Song",
+			"singer":    "Artist",
+			"albumName": "Album",
+		},
+		onlineSource{ID: "wy"},
+		"wy",
+		"320k",
+		"/tmp/fake.mp3",
+	)
+	if err == nil {
+		t.Fatal("expected strict embed to fail when cover url is missing")
+	}
+	if reason := onlineEmbedFailureReason(err); reason != "元数据嵌入失败" {
+		t.Fatalf("unexpected failure reason: %q (err=%v)", reason, err)
+	}
+}
 
 // TestOnlineEmbedCoverExtensionSniffing pins the magic-byte / mime
 // detection we use to decide which extension to give the cover

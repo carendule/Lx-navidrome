@@ -949,7 +949,7 @@ func downloadSongWithQualityFallback(song map[string]any, sourceStr string, qual
 				task.CurrentCancel = baseEmbedCancel
 				embedCtx, embedCancel := context.WithTimeout(baseEmbedCtx, 30*time.Second)
 				embedTaskID := task.ID + "-" + stringValue(song["id"])
-				finalEmbedPath, embedErr := strictOnlineEmbedDownloadedFile(embedCtx, downloadDir, embedTaskID, normalized, candidate, sourceStr, quality, stagingPath, false)
+				finalEmbedPath, embedErr := strictOnlineEmbedDownloadedFile(embedCtx, downloadDir, embedTaskID, normalized, candidate, sourceStr, quality, stagingPath)
 				embedCancel()
 				baseEmbedCancel()
 				task.CurrentCancel = nil

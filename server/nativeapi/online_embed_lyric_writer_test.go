@@ -56,6 +56,32 @@ func TestID3v24USLTFrameFormat(t *testing.T) {
 	}
 }
 
+func TestID3v23USLTFrameFormat(t *testing.T) {
+	frame := buildID3v23USLTFrame("[00:00.00]hello 一二三", "zho")
+	if !bytes.Equal(frame[:4], []byte("USLT")) {
+		t.Fatalf("frame ID should be USLT, got %q", frame[:4])
+	}
+	// ID3v2.3 frame size is 32-bit big-endian.
+	v := uint32(frame[4])<<24 | uint32(frame[5])<<16 | uint32(frame[6])<<8 | uint32(frame[7])
+	if v == 0 || int(v) != len(frame)-10 {
+		t.Fatalf("big-endian size %d != body length %d", v, len(frame)-10)
+	}
+	if frame[10] != 0x01 {
+		t.Fatalf("encoding byte should be 0x01 (UTF-16 BOM), got 0x%02x", frame[10])
+	}
+	if !bytes.Equal(frame[11:14], []byte("zho")) {
+		t.Fatalf("language should be zho, got %q", frame[11:14])
+	}
+	// Empty descriptor: UTF-16LE BOM + null terminator.
+	if !bytes.Equal(frame[14:18], []byte{0xFF, 0xFE, 0x00, 0x00}) {
+		t.Fatalf("descriptor bytes mismatch: % x", frame[14:18])
+	}
+	// Lyric text should start with UTF-16LE BOM.
+	if !bytes.Equal(frame[18:20], []byte{0xFF, 0xFE}) {
+		t.Fatalf("lyric text should start with UTF-16 BOM, got % x", frame[18:20])
+	}
+}
+
 // TestWriteID3USLTIntoExistingFile simulates the full
 // pipeline: an MP3 file already has an ID3v2 header
 // (built by ffmpeg with the broken TXXX wrapper) plus a
@@ -181,6 +207,99 @@ func TestWriteID3USLTIntoFileWithoutID3(t *testing.T) {
 	}
 	if !bytes.Equal(out[10:14], []byte("USLT")) {
 		t.Fatalf("first frame should be USLT, got %q", out[10:14])
+	}
+}
+
+// TestWriteID3USLTPreservesV23HeaderAndFrameEncoding verifies that
+// rewriting an ID3v2.3 file keeps v2.3 semantics (header version and
+// frame size encoding), avoiding mixed v2.4/v2.3 tags that strict
+// parsers reject.
+func TestWriteID3USLTPreservesV23HeaderAndFrameEncoding(t *testing.T) {
+	dir := t.TempDir()
+	// Build a minimal v2.3 tag body with TXXX(USLT) + TIT2.
+	id3Body := []byte{
+		'T', 'X', 'X', 'X',
+		0x00, 0x00, 0x00, 0x08,
+		0x00, 0x00,
+		0x00, 'U', 'S', 'L', 'T', 0x00,
+		'h', 'i',
+		'T', 'I', 'T', '2',
+		0x00, 0x00, 0x00, 0x05,
+		0x00, 0x00,
+		0x00, 'T', 'i', 't', 'l',
+	}
+	id3Header := []byte{'I', 'D', '3', 0x03, 0x00, 0x00}
+	v := uint32(len(id3Body))
+	id3Header = append(id3Header,
+		byte((v>>21)&0x7f), byte((v>>14)&0x7f),
+		byte((v>>7)&0x7f), byte(v&0x7f))
+	audio := bytes.Repeat([]byte{0x55}, 200)
+	full := append(append([]byte{}, id3Header...), id3Body...)
+	full = append(full, audio...)
+
+	path := filepath.Join(dir, "song-v23.mp3")
+	if err := os.WriteFile(path, full, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := onlineEmbedWriteID3USLT(path, "[00:00.00]real lyrics 一二三"); err != nil {
+		t.Fatalf("rewrite failed: %v", err)
+	}
+	out, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(out[:3], []byte("ID3")) {
+		t.Fatalf("output should start with ID3, got %q", out[:3])
+	}
+	if out[3] != 3 {
+		t.Fatalf("ID3 major version should stay 3, got %d", out[3])
+	}
+	bodySize := int(out[6])<<21 | int(out[7])<<14 | int(out[8])<<7 | int(out[9])
+	if bodySize <= 0 || bodySize+10 > len(out) {
+		t.Fatalf("invalid ID3v2 size: %d (file %d bytes)", bodySize, len(out))
+	}
+
+	var foundUSLT, foundTIT2, foundTXXX bool
+	pos := 10
+	for pos+10 <= 10+bodySize {
+		if out[pos] == 0 {
+			break
+		}
+		fid := string(out[pos : pos+4])
+		switch fid {
+		case "USLT":
+			foundUSLT = true
+			if out[pos+10] != 0x01 {
+				t.Fatalf("v2.3 USLT should use UTF-16 BOM encoding byte 0x01, got 0x%02x", out[pos+10])
+			}
+		case "TIT2":
+			foundTIT2 = true
+		case "TXXX":
+			foundTXXX = true
+		}
+		// v2.3 frame size decoding: big-endian uint32.
+		fsize := int(uint32(out[pos+4])<<24 | uint32(out[pos+5])<<16 | uint32(out[pos+6])<<8 | uint32(out[pos+7]))
+		remaining := 10 + bodySize - pos - 10
+		if fsize > remaining {
+			fsize = remaining
+		}
+		pos += 10 + fsize
+	}
+	if pos != 10+bodySize {
+		t.Fatalf("v2.3 frame walker ended at %d, expected %d", pos, 10+bodySize)
+	}
+	if !foundUSLT {
+		t.Fatal("rewritten tag is missing USLT")
+	}
+	if !foundTIT2 {
+		t.Fatal("rewritten tag is missing TIT2")
+	}
+	if foundTXXX {
+		t.Fatal("rewritten tag still has TXXX")
+	}
+	audioStart := 10 + bodySize
+	if !bytes.Equal(out[audioStart:], audio) {
+		t.Fatalf("audio payload was not preserved: got %d bytes, want %d", len(out)-audioStart, len(audio))
 	}
 }
 

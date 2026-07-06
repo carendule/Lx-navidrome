@@ -43,6 +43,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"unicode/utf16"
 )
 
 // onlineEmbedWriteLyricContainer dispatches to the per-format
@@ -143,16 +144,30 @@ func onlineEmbedWriteID3USLT(audioPath, lyric string) error {
 		}
 	}
 	audio := data[audioStart:audioEnd]
-	// Build a fresh USLT frame (ID3v2.4) and re-construct
-	// the ID3v2 header that wraps it.
-	usltFrame := buildID3v24USLTFrame(lyric, "eng")
-	// ID3v2.4.0 (major=4, minor=0). v2.4 defines
-	// encoding byte 3 = UTF-8, which is the only way to
-	// reliably surface CJK characters in the lyrics
-	// without doubling the file size (UTF-16) or risking
-	// mojibake (ISO-8859-1 with UTF-8 passthrough).
+	// Preserve the existing tag major version when possible.
+	// ffmpeg writes ID3v2.3 by default (`-id3v2_version 3`),
+	// and keeping v2.3 prevents a mixed-format tag where the
+	// header says v2.4 but preserved frames still use v2.3
+	// frame-size encoding (big-endian), which strict parsers
+	// like mp3tag treat as malformed.
+	targetMajor := byte(3)
+	targetMinor := byte(0)
+	if len(data) >= 10 && bytes.Equal(data[:3], []byte("ID3")) {
+		if data[3] == 3 || data[3] == 4 {
+			targetMajor = data[3]
+			targetMinor = data[4]
+		}
+	}
+
+	var usltFrame []byte
+	if targetMajor >= 4 {
+		usltFrame = buildID3v24USLTFrame(lyric, "eng")
+	} else {
+		usltFrame = buildID3v23USLTFrame(lyric, "eng")
+	}
+
 	newTagBody := append(existingFrames, usltFrame...)
-	newHeader := buildID3v2Header(len(newTagBody), 4, 0, 0)
+	newHeader := buildID3v2Header(len(newTagBody), int(targetMajor), int(targetMinor), 0)
 	out := make([]byte, 0, len(newHeader)+len(newTagBody)+len(audio)+128)
 	out = append(out, newHeader...)
 	out = append(out, newTagBody...)
@@ -367,6 +382,48 @@ func buildID3v24USLTFrame(lyric, lang string) []byte {
 	// frame[8:10] = flags = 0
 	copy(frame[10:], body)
 	return frame
+}
+
+// buildID3v23USLTFrame constructs an ID3v2.3 USLT frame.
+// v2.3 does not support UTF-8 text encoding, so we emit
+// UTF-16 with BOM (encoding byte 0x01) to preserve CJK text.
+func buildID3v23USLTFrame(lyric, lang string) []byte {
+	if lang == "" {
+		lang = "eng"
+	}
+	langBytes := []byte(lang)
+	if len(langBytes) != 3 {
+		langBytes = []byte("eng")
+	}
+	encByte := byte(0x01) // UTF-16 with BOM (ID3v2.3)
+	// Empty descriptor in UTF-16: BOM + NUL terminator.
+	descriptor := []byte{0xFF, 0xFE, 0x00, 0x00}
+	text := encodeUTF16LEWithBOM(lyric)
+	body := make([]byte, 0, 1+3+len(descriptor)+len(text))
+	body = append(body, encByte)
+	body = append(body, langBytes...)
+	body = append(body, descriptor...)
+	body = append(body, text...)
+
+	frame := make([]byte, 10+len(body))
+	copy(frame, "USLT")
+	v := uint32(len(body))
+	frame[4] = byte((v >> 24) & 0xff)
+	frame[5] = byte((v >> 16) & 0xff)
+	frame[6] = byte((v >> 8) & 0xff)
+	frame[7] = byte(v & 0xff)
+	copy(frame[10:], body)
+	return frame
+}
+
+func encodeUTF16LEWithBOM(s string) []byte {
+	codeUnits := utf16.Encode([]rune(s))
+	out := make([]byte, 0, 2+len(codeUnits)*2)
+	out = append(out, 0xFF, 0xFE)
+	for _, u := range codeUnits {
+		out = append(out, byte(u&0xff), byte((u>>8)&0xff))
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------

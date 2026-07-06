@@ -173,7 +173,6 @@ func strictOnlineEmbedDownloadedFile(
 	songSource string,
 	quality string,
 	audioPath string,
-	allowBrowserLyricFallback bool,
 ) (string, error) {
 	if audioPath == "" {
 		return audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("audio path is empty"))
@@ -184,19 +183,29 @@ func strictOnlineEmbedDownloadedFile(
 		return audioPath, nil
 	}
 
+	// Strict success criteria: metadata is considered valid only when
+	// the three core tags and cover are all available. Any missing
+	// prerequisite fails the task early.
+	title := onlineEmbedFirstNonEmpty(songInfo, "name", "songName", "title")
+	artist := onlineEmbedFirstNonEmpty(songInfo, "singer", "singerName", "artist")
+	album := onlineEmbedFirstNonEmpty(songInfo, "albumName", "album", "albumname")
+	if strings.TrimSpace(title) == "" || strings.TrimSpace(artist) == "" || strings.TrimSpace(album) == "" {
+		return audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("required metadata missing: title/artist/album"))
+	}
+
 	coverURL := pickOnlineEmbedCoverURL(songInfo)
+	if strings.TrimSpace(coverURL) == "" {
+		return audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("cover url missing"))
+	}
 	coverRef := fetchAndPersistOnlineCover(ctx, downloadDir, embedID, songInfo)
 	defer onlineEmbedCleanupArtwork(downloadDir)
-	if coverURL != "" && coverRef == nil {
+	if coverRef == nil {
 		return audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("cover fetch failed"))
 	}
 
 	lyric := ""
 	if embedMode == embedModeAll {
 		lyric, _ = fetchOnlineEmbedLyric(ctx, candidate, songSource, songInfo, quality)
-		if lyric == "" && allowBrowserLyricFallback {
-			lyric = lookupOnlineBrowserLyricFromSongInfo(ctx, songInfo)
-		}
 		if strings.TrimSpace(lyric) == "" {
 			return audioPath, newOnlineEmbedFailure("歌词嵌入失败", fmt.Errorf("lyric fetch failed"))
 		}
@@ -320,7 +329,14 @@ func persistOnlineEmbedCover(downloadDir, taskID, mime string, body []byte) (str
 //     song (e.g. a same-title remix) is rejected and we
 //     fall through to the multi-source Go fallback.
 //
-//  2. The Go client with multi-source fallback SECOND.
+//  2. songInfo.meta.lrcUrl fallback SECOND.
+//     This keeps strict server-mode and browser-mode behavior
+//     aligned: if the script has no lyric action, we still try
+//     the source-provided lrcUrl before moving on. The same
+//     matcher is applied, so we only accept it when title/artist/
+//     duration evidence is good enough.
+//
+//  3. The Go client with multi-source fallback LAST.
 //     We try wy / kg / kw / tx / mg in order (see
 //     onlineLyricFallbackOrder), and accept the first
 //     candidate whose [ti:]/[ar:] tags + duration match
@@ -356,18 +372,23 @@ func fetchOnlineEmbedLyric(ctx context.Context, source onlineSource, songSource 
 	// matcher's score is OK we take the result and
 	// skip the rest of the fallback run.
 	if out, ok := fetchOnlineEmbedLyricViaScriptOk(ctx, source, songSource, songInfo, quality); ok {
-		cand := onlineLyricCandidate{Source: "script:" + source.ID, Lyric: out}
-		cand.SelfTitle, cand.SelfArtist, cand.SelfAlbum = onlineLyricParseIDTags(out)
-		cand.LyricDurSec = onlineLyricMaxTimeTagSeconds(out)
-		score := onlineLyricMatchScoreLyric(songInfo, cand)
-		if score.OK {
-			embedTrace(ctx, "lyric:script-accepted", "source", source.ID, "lyricLen", len(out), "titleScore", score.TitleScore, "artistScore", score.ArtistScore, "durationDelta", score.DurationDelta)
-			return out, nil
+		if accepted, ok := onlineEmbedAcceptLyricCandidate(ctx, "script:"+source.ID, out, songInfo); ok {
+			return accepted, nil
 		}
-		embedTrace(ctx, "lyric:script-rejected", "source", source.ID, "lyricLen", len(out), "reason", score.Reason, "titleScore", score.TitleScore, "artistScore", score.ArtistScore, "durationDelta", score.DurationDelta)
 	}
 
-	// 2) Multi-source Go client fallback. Iterates
+	// 2) songInfo.meta.lrcUrl fallback. This path is now shared by
+	// all embed flows (server/browser/playlist sync), but still goes
+	// through the same matcher before we accept it.
+	if out := lookupOnlineBrowserLyricFromSongInfo(ctx, songInfo); strings.TrimSpace(out) != "" {
+		if accepted, ok := onlineEmbedAcceptLyricCandidate(ctx, "meta.lrcUrl", out, songInfo); ok {
+			return accepted, nil
+		}
+	} else {
+		embedTrace(ctx, "lyric:meta-lrc-empty", "songName", stringValue(songInfo["name"]))
+	}
+
+	// 3) Multi-source Go client fallback. Iterates
 	// onlineLyricFallbackOrder and accepts the first
 	// candidate the matcher approves. The trace line at
 	// the end of the run summarizes every attempt so
@@ -400,6 +421,23 @@ func fetchOnlineEmbedLyric(ctx context.Context, source onlineSource, songSource 
 	// falls through to ffmpeg without a lyrics frame.
 	embedTrace(ctx, "lyric:all-paths-empty", "songName", stringValue(songInfo["name"]), "songmid", stringValue(songInfo["songmid"]))
 	return "", nil
+}
+
+func onlineEmbedAcceptLyricCandidate(ctx context.Context, source string, lyric string, songInfo map[string]any) (string, bool) {
+	text := strings.TrimSpace(lyric)
+	if text == "" {
+		return "", false
+	}
+	cand := onlineLyricCandidate{Source: source, Lyric: text}
+	cand.SelfTitle, cand.SelfArtist, cand.SelfAlbum = onlineLyricParseIDTags(text)
+	cand.LyricDurSec = onlineLyricMaxTimeTagSeconds(text)
+	score := onlineLyricMatchScoreLyric(songInfo, cand)
+	if !score.OK {
+		embedTrace(ctx, "lyric:candidate-rejected", "source", source, "lyricLen", len(text), "reason", score.Reason, "titleScore", score.TitleScore, "artistScore", score.ArtistScore, "durationDelta", score.DurationDelta)
+		return "", false
+	}
+	embedTrace(ctx, "lyric:candidate-accepted", "source", source, "lyricLen", len(text), "titleScore", score.TitleScore, "artistScore", score.ArtistScore, "durationDelta", score.DurationDelta)
+	return text, true
 }
 
 // onlineLyricMatchAttemptsTraceValue formats the per-attempt
@@ -1070,24 +1108,21 @@ var onlineEmbedBannerOnce sync.Once
 // are written by onlineEmbedWriteID3USLT in a post-ffmpeg
 // pass to avoid ffmpeg's TXXX(USLT) wrapper bug).
 func onlineEmbedAppendTagMetadataArgs(args *[]string, songInfo map[string]any, quality string) {
-	title := strings.TrimSpace(stringValue(songInfo["name"]))
-	artist := strings.TrimSpace(stringValue(songInfo["singer"]))
-	album := strings.TrimSpace(stringValue(songInfo["albumName"]))
-	if title == "" {
-		if meta := mapValue(songInfo["meta"]); meta != nil {
-			title = strings.TrimSpace(stringValue(meta["songName"]))
-		}
-	}
-	if artist == "" {
-		if meta := mapValue(songInfo["meta"]); meta != nil {
-			artist = strings.TrimSpace(stringValue(meta["singerName"]))
-		}
-	}
-	if album == "" {
-		if meta := mapValue(songInfo["meta"]); meta != nil {
-			album = strings.TrimSpace(stringValue(meta["albumName"]))
-		}
-	}
+	title := onlineEmbedFirstNonEmpty(songInfo, "name", "songName", "title")
+	artist := onlineEmbedFirstNonEmpty(songInfo, "singer", "singerName", "artist")
+	album := onlineEmbedFirstNonEmpty(songInfo, "albumName", "album", "albumname")
+	albumArtist := onlineEmbedFirstNonEmpty(songInfo, "albumArtist", "album_artist", "albumartist")
+	composer := onlineEmbedFirstNonEmpty(songInfo, "composer", "composerName")
+	genre := onlineEmbedFirstNonEmpty(songInfo, "genre", "style")
+	track := onlineEmbedNormalizeTrackOrDiscTag(onlineEmbedFirstNonEmpty(songInfo, "track", "trackNo", "trackNumber", "trackNum", "songNo", "no"))
+	disc := onlineEmbedNormalizeTrackOrDiscTag(onlineEmbedFirstNonEmpty(songInfo, "disc", "discNo", "discNumber", "cdSerial", "discnum", "cdNum"))
+	date := onlineEmbedNormalizeDateTag(onlineEmbedFirstNonEmpty(songInfo, "date", "publishDate", "publishTime", "pubTime", "pub_time", "releaseDate", "time_public", "year"))
+	bpm := onlineEmbedNormalizeBPMTag(onlineEmbedFirstNonEmpty(songInfo, "bpm"))
+	language := onlineEmbedFirstNonEmpty(songInfo, "language", "lang")
+	isrc := onlineEmbedFirstNonEmpty(songInfo, "isrc")
+	copyright := onlineEmbedFirstNonEmpty(songInfo, "copyright", "copyrightText", "cpName")
+	comment := onlineEmbedFirstNonEmpty(songInfo, "comment", "description", "desc", "intro")
+
 	if title != "" {
 		*args = append(*args, "-metadata", "title="+title)
 	}
@@ -1097,9 +1132,169 @@ func onlineEmbedAppendTagMetadataArgs(args *[]string, songInfo map[string]any, q
 	if album != "" {
 		*args = append(*args, "-metadata", "album="+album)
 	}
-	if quality != "" {
-		*args = append(*args, "-metadata", "comment=Quality: "+quality)
+	if albumArtist != "" {
+		*args = append(*args, "-metadata", "album_artist="+albumArtist)
 	}
+	if composer != "" {
+		*args = append(*args, "-metadata", "composer="+composer)
+	}
+	if genre != "" {
+		*args = append(*args, "-metadata", "genre="+genre)
+	}
+	if track != "" {
+		*args = append(*args, "-metadata", "track="+track)
+	}
+	if disc != "" {
+		*args = append(*args, "-metadata", "disc="+disc)
+	}
+	if date != "" {
+		*args = append(*args, "-metadata", "date="+date)
+	}
+	if bpm != "" {
+		*args = append(*args, "-metadata", "bpm="+bpm)
+	}
+	if language != "" {
+		*args = append(*args, "-metadata", "language="+language)
+	}
+	if isrc != "" {
+		*args = append(*args, "-metadata", "isrc="+isrc)
+	}
+	if copyright != "" {
+		*args = append(*args, "-metadata", "copyright="+copyright)
+	}
+
+	// Keep upstream comment when present; append quality marker so the
+	// UI-visible note does not overwrite source-provided metadata.
+	if quality != "" {
+		q := "Quality: " + quality
+		if comment == "" {
+			comment = q
+		} else if !strings.Contains(comment, q) {
+			comment = comment + " | " + q
+		}
+	}
+	if comment != "" {
+		*args = append(*args, "-metadata", "comment="+comment)
+	}
+}
+
+func onlineEmbedFirstNonEmpty(songInfo map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if v := strings.TrimSpace(stringValue(songInfo[key])); v != "" {
+			return v
+		}
+	}
+	if meta := mapValue(songInfo["meta"]); meta != nil {
+		for _, key := range keys {
+			if v := strings.TrimSpace(stringValue(meta[key])); v != "" {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
+func onlineEmbedNormalizeDateTag(raw string) string {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return ""
+	}
+	const minYear = 1900
+	maxYear := time.Now().Year() + 1
+	// Common case: YYYY-MM-DD / YYYY/MM/DD / YYYY.MM.DD.
+	if len(v) >= 4 {
+		prefix := v[:4]
+		isYear := true
+		for i := 0; i < 4; i++ {
+			if prefix[i] < '0' || prefix[i] > '9' {
+				isYear = false
+				break
+			}
+		}
+		if isYear {
+			y, _ := strconv.Atoi(prefix)
+			if y >= minYear && y <= maxYear {
+				return prefix
+			}
+			return ""
+		}
+	}
+	// Fallback: first 4 consecutive digits anywhere in the string.
+	for i := 0; i+4 <= len(v); i++ {
+		ok := true
+		for j := 0; j < 4; j++ {
+			c := v[i+j]
+			if c < '0' || c > '9' {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			yearText := v[i : i+4]
+			y, _ := strconv.Atoi(yearText)
+			if y >= minYear && y <= maxYear {
+				return yearText
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+func onlineEmbedNormalizeTrackOrDiscTag(raw string) string {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return ""
+	}
+	parts := strings.Split(v, "/")
+	if len(parts) == 0 || len(parts) > 2 {
+		return ""
+	}
+	normalizePart := func(part string) (string, bool) {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return "", false
+		}
+		for i := 0; i < len(part); i++ {
+			if part[i] < '0' || part[i] > '9' {
+				return "", false
+			}
+		}
+		n, err := strconv.Atoi(part)
+		if err != nil || n <= 0 || n > 999 {
+			return "", false
+		}
+		return strconv.Itoa(n), true
+	}
+	left, ok := normalizePart(parts[0])
+	if !ok {
+		return ""
+	}
+	if len(parts) == 1 {
+		return left
+	}
+	right, ok := normalizePart(parts[1])
+	if !ok {
+		return left
+	}
+	return left + "/" + right
+}
+
+func onlineEmbedNormalizeBPMTag(raw string) string {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return ""
+	}
+	for i := 0; i < len(v); i++ {
+		if v[i] < '0' || v[i] > '9' {
+			return ""
+		}
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 20 || n > 300 {
+		return ""
+	}
+	return strconv.Itoa(n)
 }
 
 func onlineEmbedMode() string {
@@ -1175,7 +1370,7 @@ func embedOnlineServerDownloadMetadata(
 		embedTrace(embedCtx, "server:skip-none-mode", "task", task.ID)
 		return audioPath, nil
 	}
-	finalPath, err := strictOnlineEmbedDownloadedFile(embedCtx, task.DownloadDir, task.ID, songInfo, candidate, task.Source, quality, audioPath, false)
+	finalPath, err := strictOnlineEmbedDownloadedFile(embedCtx, task.DownloadDir, task.ID, songInfo, candidate, task.Source, quality, audioPath)
 	if err != nil {
 		log.Error(embedCtx, "Online embed: server-mode embed failed", "task", task.ID, "err", err)
 		return finalPath, err
@@ -1247,7 +1442,7 @@ func embedOnlineBrowserTaskWithScript(
 		embedTrace(embedCtx, "browser:skip-none-mode", "task", taskID)
 		return audioPath, nil
 	}
-	finalPath, err := strictOnlineEmbedDownloadedFile(embedCtx, filepath.Dir(audioPath), task.ID, songInfo, candidate, songSource, quality, audioPath, true)
+	finalPath, err := strictOnlineEmbedDownloadedFile(embedCtx, filepath.Dir(audioPath), task.ID, songInfo, candidate, songSource, quality, audioPath)
 	if err != nil {
 		log.Error(embedCtx, "Online embed: browser-task embed failed", "task", task.ID, "err", err)
 		return finalPath, err
@@ -1374,12 +1569,11 @@ func fetchAndPersistOnlineCover(ctx context.Context, downloadDir, taskID string,
 	return &onlineEmbedArtworkRef{Path: path, Mime: mime}
 }
 
-// lookupOnlineBrowserLyricFromSongInfo is a fallback lyric source
-// for browser-mode downloads where we don't have the resolving
-// script on hand. It looks at the canonical songInfo.meta.lrcUrl
-// field that some lx-music source scripts populate, fetches it,
-// and returns the body as a string. Returns "" when not set or on
-// any error — same convention as the other lyric fetchers.
+// lookupOnlineBrowserLyricFromSongInfo reads songInfo.meta.lrcUrl,
+// fetches the lyric body, and returns it as text. It is used as the
+// second-priority fallback in the unified lyric strategy after script
+// lyric and before multi-source fallback. Returns "" when not set or
+// on any error — same convention as the other lyric fetchers.
 func lookupOnlineBrowserLyricFromSongInfo(ctx context.Context, songInfo map[string]any) string {
 	meta := mapValue(songInfo["meta"])
 	if meta == nil {
