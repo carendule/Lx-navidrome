@@ -169,6 +169,17 @@ const useStyles = makeStyles((theme) => ({
     color: theme.palette.text.secondary,
     whiteSpace: 'nowrap',
   },
+  failedReasonText: {
+    fontSize: '0.75rem',
+    color: theme.palette.text.secondary,
+    maxWidth: 220,
+    textAlign: 'right',
+    marginTop: 2,
+    display: 'block',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
   progressWrap: {
     marginTop: theme.spacing(1),
   },
@@ -298,6 +309,13 @@ const normalizeFailedSongDetails = (task) => {
       reason: '未知错误',
     }))
     .filter((item) => item.name)
+}
+
+const formatSingleTaskFailedReason = (task, displayStatus) => {
+  if (task?.taskType === 'playlist_sync' || displayStatus !== 'failed') return ''
+  const reason = String(task?.error || task?.reason || task?.message || '').trim()
+  if (!reason) return '原因: 下载失败'
+  return `原因: ${reason.replace(/\s+/g, ' ')}`
 }
 
 const DownloadList = ({
@@ -476,6 +494,8 @@ const DownloadList = ({
                   isPlaylistSyncTask && task.status === 'sync-error'
                 const isToggleable = !isPlaylistSyncTask
                 const failedCount = normalizeFailedSongDetails(task).length
+                const displayStatus = getDisplayStatus(task)
+                const singleTaskFailedReason = formatSingleTaskFailedReason(task, displayStatus)
 
                 const handleTaskClick = () => {
                   if (isFailedPlaylistSyncTask) {
@@ -536,10 +556,10 @@ const DownloadList = ({
                       <Box className={classes.rightMeta}>
                         <Chip
                           size="small"
-                          label={statusLabel[getDisplayStatus(task)] || '未知'}
+                          label={statusLabel[displayStatus] || '未知'}
                           style={{
                             backgroundColor:
-                              taskStatusColorMap[getDisplayStatus(task)] || '#999',
+                              taskStatusColorMap[displayStatus] || '#999',
                             color: 'white',
                           }}
                         />
@@ -548,6 +568,14 @@ const DownloadList = ({
                             {task.status === 'sync-error'
                               ? `失败: ${failedCount}首`
                               : `剩余: ${Math.max(0, Number(task.remainingCount) || 0)}首`}
+                          </Typography>
+                        )}
+                        {!!singleTaskFailedReason && (
+                          <Typography
+                            className={classes.failedReasonText}
+                            title={singleTaskFailedReason}
+                          >
+                            {singleTaskFailedReason}
                           </Typography>
                         )}
                       </Box>
@@ -634,6 +662,7 @@ DownloadList.propTypes = {
       source: PropTypes.string,
       sourceName: PropTypes.string,
       status: PropTypes.string,
+      error: PropTypes.string,
       title: PropTypes.string,
       currentSongTitle: PropTypes.string,
       currentSongReused: PropTypes.bool,

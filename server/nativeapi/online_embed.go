@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -127,6 +128,91 @@ const onlineEmbedLyricTagFrame = "lyrics"
 type onlineEmbedResult struct {
 	HadCover bool
 	HadLyric bool
+}
+
+type onlineEmbedFailure struct {
+	Reason string
+	Cause  error
+}
+
+func (e *onlineEmbedFailure) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Cause == nil {
+		return e.Reason
+	}
+	return e.Reason + ": " + e.Cause.Error()
+}
+
+func (e *onlineEmbedFailure) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+func newOnlineEmbedFailure(reason string, cause error) error {
+	return &onlineEmbedFailure{Reason: reason, Cause: cause}
+}
+
+func onlineEmbedFailureReason(err error) string {
+	var embedErr *onlineEmbedFailure
+	if errors.As(err, &embedErr) {
+		return embedErr.Reason
+	}
+	return ""
+}
+
+func strictOnlineEmbedDownloadedFile(
+	ctx context.Context,
+	downloadDir string,
+	embedID string,
+	songInfo map[string]any,
+	candidate onlineSource,
+	songSource string,
+	quality string,
+	audioPath string,
+	allowBrowserLyricFallback bool,
+) (string, error) {
+	if audioPath == "" {
+		return audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("audio path is empty"))
+	}
+
+	embedMode := onlineEmbedMode()
+	if embedMode == embedModeNone {
+		return audioPath, nil
+	}
+
+	coverURL := pickOnlineEmbedCoverURL(songInfo)
+	coverRef := fetchAndPersistOnlineCover(ctx, downloadDir, embedID, songInfo)
+	defer onlineEmbedCleanupArtwork(downloadDir)
+	if coverURL != "" && coverRef == nil {
+		return audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("cover fetch failed"))
+	}
+
+	lyric := ""
+	if embedMode == embedModeAll {
+		lyric, _ = fetchOnlineEmbedLyric(ctx, candidate, songSource, songInfo, quality)
+		if lyric == "" && allowBrowserLyricFallback {
+			lyric = lookupOnlineBrowserLyricFromSongInfo(ctx, songInfo)
+		}
+		if strings.TrimSpace(lyric) == "" {
+			return audioPath, newOnlineEmbedFailure("歌词嵌入失败", fmt.Errorf("lyric fetch failed"))
+		}
+	}
+
+	_, finalPath, err := onlineEmbedDownloadMetadata(ctx, audioPath, songInfo, quality, coverRef, lyric)
+	if err != nil {
+		if finalPath == "" {
+			finalPath = audioPath
+		}
+		return finalPath, err
+	}
+	if finalPath == "" {
+		finalPath = audioPath
+	}
+	return finalPath, nil
 }
 
 // onlineEmbedArtworkRef is a small wrapper so the embed step can
@@ -658,7 +744,7 @@ func onlineEmbedDownloadMetadata(
 	cmdPath, err := ffmpegImpl.CmdPath()
 	if err != nil {
 		embedTrace(ctx, "download_metadata:ffmpeg-missing", "audio", audioPath, "err", err.Error())
-		return result, audioPath, nil
+		return result, audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("ffmpeg missing: %w", err))
 	}
 	embedTrace(ctx, "download_metadata:ffmpeg-found", "audio", audioPath, "cmd", cmdPath)
 
@@ -670,7 +756,7 @@ func onlineEmbedDownloadMetadata(
 	format, formatName := onlineEmbedSniffAudioFormat(audioPath)
 	if format == "" {
 		embedTrace(ctx, "download_metadata:format-unknown", "audio", audioPath, "hadCover", result.HadCover, "hadLyric", result.HadLyric)
-		return result, audioPath, nil
+		return result, audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("unknown audio format"))
 	}
 	embedTrace(ctx, "download_metadata:starting-ffmpeg", "audio", audioPath, "format", format, "hadCover", result.HadCover, "hadLyric", result.HadLyric)
 
@@ -798,17 +884,17 @@ func onlineEmbedDownloadMetadata(
 			retryStderr, retryErr := runFFmpeg(retryArgs)
 			if retryErr != nil {
 				embedTrace(ctx, "download_metadata:ffmpeg-retry-autodetect-failed", "audio", audioPath, "err", retryErr.Error(), "stderr", retryStderr)
-				return result, audioPath, nil
+				return result, audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("ffmpeg failed: %w", retryErr))
 			}
 			embedTrace(ctx, "download_metadata:ffmpeg-retry-autodetect-ok", "audio", audioPath)
 		} else {
-			return result, audioPath, nil
+			return result, audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("ffmpeg failed: %w", err))
 		}
 	}
 	embedTrace(ctx, "download_metadata:ffmpeg-ok", "audio", audioPath)
 	if err := os.Rename(tmpPath, audioPath); err != nil {
 		embedTrace(ctx, "download_metadata:rename-failed", "audio", audioPath, "err", err.Error())
-		return result, audioPath, nil
+		return result, audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("rename failed: %w", err))
 	}
 	// Normalize the file extension for mp4/m4a content. The
 	// upstream script may have named the file with a .aac
@@ -826,6 +912,7 @@ func onlineEmbedDownloadMetadata(
 		newPath, renErr := onlineEmbedNormalizeM4AExtension(audioPath)
 		if renErr != nil {
 			embedTrace(ctx, "download_metadata:ext-rename-failed", "audio", audioPath, "err", renErr.Error())
+			return result, audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("extension rename failed: %w", renErr))
 		} else if newPath != "" {
 			embedTrace(ctx, "download_metadata:ext-renamed", "from", audioPath, "to", newPath)
 			audioPath = newPath
@@ -844,6 +931,7 @@ func onlineEmbedDownloadMetadata(
 	if result.HadLyric {
 		if err := onlineEmbedWriteLyricContainer(ctx, format, audioPath, lyric); err != nil {
 			embedTrace(ctx, "download_metadata:lyric-rewrite-failed", "format", format, "audio", audioPath, "err", err.Error())
+			return result, audioPath, newOnlineEmbedFailure("歌词嵌入失败", err)
 		} else {
 			embedTrace(ctx, "download_metadata:lyric-rewrite-ok", "format", format, "audio", audioPath, "lyricLen", len(lyric))
 		}
@@ -1054,7 +1142,7 @@ func embedOnlineServerDownloadMetadata(
 	candidate onlineSource,
 	quality string,
 	audioPath string,
-) {
+) (string, error) {
 	// Top-of-function trace: one [EMBED] line per server
 	// download attempt. If the user reports "no LYRICS tag
 	// and no [EMBED] log", this line being absent means
@@ -1062,7 +1150,7 @@ func embedOnlineServerDownloadMetadata(
 	embedTrace(context.Background(), "embed:server-entry-reached", "task", task.ID, "audio", audioPath, "quality", quality, "source", candidate.ID)
 	if audioPath == "" {
 		embedTrace(ctx, "server:no-audio-path", "task", task.ID)
-		return
+		return audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("audio path is empty"))
 	}
 	embedTrace(ctx, "server:enter", "task", task.ID, "audio", audioPath, "quality", quality, "source", candidate.ID)
 	// Use a detached context (not the per-attempt ctx) so a
@@ -1085,54 +1173,21 @@ func embedOnlineServerDownloadMetadata(
 	embedMode := onlineEmbedMode()
 	if embedMode == embedModeNone {
 		embedTrace(embedCtx, "server:skip-none-mode", "task", task.ID)
-		return
+		return audioPath, nil
 	}
-
-	// 1) Cover
-	coverRef := fetchAndPersistOnlineCover(embedCtx, task.DownloadDir, task.ID, songInfo)
-
-	// 2) Lyric — only fetched in "all" mode. We deliberately
-	// skip the round-trip in "metadata" mode because most
-	// popular lx-music scripts don't expose a lyric action and
-	// the dispatch would block ffmpeg for the full timeout
-	// window. In "all" mode the lyric is written into the
-	// audio file's USLT / LYRICS / ©lyr tag frame by the
-	// ffmpeg pass below (matching lxserver-main's
-	// `tagger2.lyrics = lyricText` in fileCache.ts). The
-	// user explicitly opted out of a sidecar `.lrc` file, so
-	// we don't write one.
-	lyric := ""
-	if embedMode == embedModeAll {
-		lyric, _ = fetchOnlineEmbedLyric(embedCtx, candidate, task.Source, songInfo, quality)
-	}
-	if lyric != "" {
-		log.Info(embedCtx, "Online embed: lyric fetched for task", "task", task.ID, "len", len(lyric))
-	} else {
-		log.Debug(embedCtx, "Online embed: no lyric available for task", "task", task.ID)
-	}
-	if coverRef != nil {
-		log.Info(embedCtx, "Online embed: cover fetched for task", "task", task.ID, "path", coverRef.Path, "mime", coverRef.Mime)
-	}
-
-	// 3) ffmpeg merge — writes cover (APIC), tags, and lyrics
-	// (USLT / Vorbis LYRICS / iTunes ©lyr) all in one pass.
-	// lyric is empty here in embedModeMetadata so the lyrics
-	// frame is omitted entirely. We capture the (possibly
-	// renamed) audio path and propagate it to the task
-	// record so subsequent reads / scans find the file
-	// even if the extension was changed from .aac to .m4a.
-	if _, finalPath, err := onlineEmbedDownloadMetadata(embedCtx, audioPath, songInfo, quality, coverRef, lyric); err != nil {
+	finalPath, err := strictOnlineEmbedDownloadedFile(embedCtx, task.DownloadDir, task.ID, songInfo, candidate, task.Source, quality, audioPath, false)
+	if err != nil {
 		log.Error(embedCtx, "Online embed: server-mode embed failed", "task", task.ID, "err", err)
-	} else if finalPath != "" && finalPath != audioPath {
+		return finalPath, err
+	}
+	if finalPath != "" && finalPath != audioPath {
 		newPath := finalPath
 		updateOnlineDownloadTask(task.ID, func(t *onlineDownloadTask) {
 			t.FilePath = newPath
 			t.FileName = filepath.Base(newPath)
 		})
 	}
-
-	// 4) Cover artifact cleanup
-	onlineEmbedCleanupArtwork(task.DownloadDir)
+	return finalPath, nil
 }
 
 // embedOnlineBrowserTaskWithScript is the variant used by the
@@ -1155,7 +1210,7 @@ func embedOnlineBrowserTaskWithScript(
 	songSource string,
 	quality string,
 	audioPath string,
-) {
+) (string, error) {
 	// Top-of-function trace. We log here BEFORE any
 	// conditionals so the user can grep their navidrome.log
 	// for [EMBED] and see whether this function was even
@@ -1171,13 +1226,13 @@ func embedOnlineBrowserTaskWithScript(
 	embedTrace(context.Background(), "embed:browser-entry-reached", "task", taskID, "songSource", songSource, "candidate", candidate.ID, "audio", audioPath, "quality", quality)
 	if audioPath == "" {
 		embedTrace(ctx, "browser:no-audio-path", "task", taskID)
-		return
+		return audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("audio path is empty"))
 	}
 	embedTrace(ctx, "browser:enter", "task", taskID, "audio", audioPath, "source", candidate.ID)
 	if task == nil {
 		task = lookupOnlineDownloadTaskForEmbed(taskID)
 		if task == nil {
-			return
+			return audioPath, newOnlineEmbedFailure("元数据嵌入失败", fmt.Errorf("download task not found"))
 		}
 	}
 	embedCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1190,37 +1245,18 @@ func embedOnlineBrowserTaskWithScript(
 	embedMode := onlineEmbedMode()
 	if embedMode == embedModeNone {
 		embedTrace(embedCtx, "browser:skip-none-mode", "task", taskID)
-		return
+		return audioPath, nil
 	}
-
-	downloadDir := filepath.Dir(audioPath)
-	coverRef := fetchAndPersistOnlineCover(embedCtx, downloadDir, task.ID, songInfo)
-
-	// Lyric is only fetched in "all" mode. We also keep the
-	// browser-collected meta.lrcUrl fallback (populated by the
-	// lx-music script's lyric action) because the browser
-	// pipeline often already has the lyrics on hand.
-	lyric := ""
-	if embedMode == embedModeAll {
-		lyric, _ = fetchOnlineEmbedLyric(embedCtx, candidate, songSource, songInfo, quality)
-		if lyric == "" {
-			lyric = lookupOnlineBrowserLyricFromSongInfo(embedCtx, songInfo)
-		}
-	}
-
-	// Capture the (possibly renamed) audio path so the
-	// task record tracks the corrected extension.
-	// Browser-mode tasks live in the per-task downloader
-	// map (not the on-disk task DB), so we update the
-	// live pointer directly.
-	if _, finalPath, err := onlineEmbedDownloadMetadata(embedCtx, audioPath, songInfo, quality, coverRef, lyric); err != nil {
+	finalPath, err := strictOnlineEmbedDownloadedFile(embedCtx, filepath.Dir(audioPath), task.ID, songInfo, candidate, songSource, quality, audioPath, true)
+	if err != nil {
 		log.Error(embedCtx, "Online embed: browser-task embed failed", "task", task.ID, "err", err)
-	} else if finalPath != "" && finalPath != audioPath {
+		return finalPath, err
+	}
+	if finalPath != "" && finalPath != audioPath {
 		task.FilePath = finalPath
 		task.FileName = filepath.Base(finalPath)
 	}
-
-	onlineEmbedCleanupArtwork(downloadDir)
+	return finalPath, nil
 }
 
 // lookupOnlineDownloadTaskForEmbed is a small helper that fetches

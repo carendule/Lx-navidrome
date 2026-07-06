@@ -172,6 +172,9 @@ func classifyPlaylistSyncFailureReason(err error, fallback string) string {
 	}
 
 	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if embedReason := onlineEmbedFailureReason(err); embedReason != "" {
+		return embedReason
+	}
 	if strings.Contains(msg, "未找到支持") || strings.Contains(msg, "启用音源") || strings.Contains(msg, "no enabled source") || strings.Contains(msg, "no compatible quality") {
 		return "无可用解析源"
 	}
@@ -931,36 +934,51 @@ func downloadSongWithQualityFallback(song map[string]any, sourceStr string, qual
 				continue
 			}
 
-			finalPath := uniqueOnlineDownloadPath(downloadDir, fileName)
-			if copyErr := copyFile(result.FilePath, finalPath); copyErr != nil {
-				lastErr = copyErr
+			stagingPath := uniqueOnlineDownloadStagingPath(fileName)
+			stagingPath, moveErr := moveDownloadedFileToFinalPath(result.FilePath, stagingPath)
+			if moveErr != nil {
+				lastErr = moveErr
 				_ = os.Remove(result.FilePath)
-				log.Debug(nil, "Playlist sync copy to download dir failed", "songName", stringValue(song["name"]), "quality", quality, "path", finalPath, "err", copyErr.Error())
+				log.Debug(nil, "Playlist sync move to staging dir failed", "songName", stringValue(song["name"]), "quality", quality, "path", stagingPath, "err", moveErr.Error())
 				continue
 			}
-			_ = os.Remove(result.FilePath)
 
-			savedPath := finalPath
+			savedPath := stagingPath
 			if embedMode != embedModeNone {
 				baseEmbedCtx, baseEmbedCancel := context.WithCancel(context.Background())
 				task.CurrentCancel = baseEmbedCancel
 				embedCtx, embedCancel := context.WithTimeout(baseEmbedCtx, 30*time.Second)
 				embedTaskID := task.ID + "-" + stringValue(song["id"])
-				coverRef := fetchAndPersistOnlineCover(embedCtx, downloadDir, embedTaskID, normalized)
-				lyric := ""
-				if embedMode == embedModeAll {
-					lyric, _ = fetchOnlineEmbedLyric(embedCtx, candidate, sourceStr, normalized, quality)
-				}
-				if _, finalEmbedPath, embedErr := onlineEmbedDownloadMetadata(embedCtx, finalPath, normalized, quality, coverRef, lyric); embedErr != nil {
-					log.Error(embedCtx, "Online embed: playlist sync embed failed", "task", task.ID, "songName", stringValue(song["name"]), "err", embedErr)
-				} else if finalEmbedPath != "" {
-					savedPath = finalEmbedPath
-				}
+				finalEmbedPath, embedErr := strictOnlineEmbedDownloadedFile(embedCtx, downloadDir, embedTaskID, normalized, candidate, sourceStr, quality, stagingPath, false)
 				embedCancel()
 				baseEmbedCancel()
 				task.CurrentCancel = nil
-				onlineEmbedCleanupArtwork(downloadDir)
+				if embedErr != nil {
+					cleanupPath := stagingPath
+					if finalEmbedPath != "" {
+						cleanupPath = finalEmbedPath
+					}
+					if cleanupPath != "" {
+						_ = os.Remove(cleanupPath)
+					}
+					log.Error(embedCtx, "Online embed: playlist sync embed failed", "task", task.ID, "songName", stringValue(song["name"]), "err", embedErr)
+					lastErr = embedErr
+					continue
+				}
+				if finalEmbedPath != "" {
+					savedPath = finalEmbedPath
+				}
 			}
+
+			publishedPath := uniqueOnlineDownloadPath(downloadDir, filepath.Base(savedPath))
+			publishedPath, publishErr := moveDownloadedFileToFinalPath(savedPath, publishedPath)
+			if publishErr != nil {
+				lastErr = publishErr
+				_ = os.Remove(savedPath)
+				log.Debug(nil, "Playlist sync move to final download dir failed", "songName", stringValue(song["name"]), "quality", quality, "path", publishedPath, "err", publishErr.Error())
+				continue
+			}
+			savedPath = publishedPath
 
 			log.Debug(nil, "Playlist sync lx download succeeded",
 				"songName", stringValue(song["name"]),

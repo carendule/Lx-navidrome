@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -1122,7 +1123,8 @@ func runOnlineServerDownloadTask(taskID string) {
 			fileName += ".mp3"
 		}
 		finalPath := uniqueOnlineDownloadPath(downloadDir, fileName)
-		tempPath := finalPath + ".part"
+		stagingPath := uniqueOnlineDownloadStagingPath(fileName)
+		tempPath := stagingPath + ".part"
 		headers := map[string]string{}
 		for k, v := range resolvedHeaders {
 			headers[k] = v
@@ -1149,19 +1151,37 @@ func runOnlineServerDownloadTask(taskID string) {
 		result, fetchErr := downloadOnlineServerTaskToPath(attemptCtx, taskID)
 		attemptCancel()
 		if fetchErr == nil {
-			// Best-effort: cover / metadata / lyrics embed. All
-			// sub-steps log and continue on failure, so the user
-			// always gets a playable file even if ffmpeg is missing
-			// or the upstream never returned cover art.
-			embedOnlineServerDownloadMetadata(attemptCtx, task, candidate, quality, result.FilePath)
+			finalPath, embedErr := embedOnlineServerDownloadMetadata(attemptCtx, task, candidate, quality, result.FilePath)
+			if embedErr != nil {
+				cleanupPath := finalPath
+				if cleanupPath == "" {
+					cleanupPath = result.FilePath
+				}
+				if cleanupPath != "" {
+					_ = os.Remove(cleanupPath)
+				}
+				setOnlineDownloadTaskFailed(taskID, embedErr)
+				done = true
+				continue
+			}
+			if finalPath == "" {
+				finalPath = result.FilePath
+			}
+			publishedPath, publishErr := moveDownloadedFileToFinalPath(finalPath, task.FilePath)
+			if publishErr != nil {
+				_ = os.Remove(finalPath)
+				setOnlineDownloadTaskFailed(taskID, fmt.Errorf("移动下载文件失败: %w", publishErr))
+				done = true
+				continue
+			}
 			updateOnlineDownloadTask(taskID, func(t *onlineDownloadTask) {
 				t.Status = "completed"
 				t.Progress = 100
 				t.Received = result.Size
 				t.Total = result.Size
 				t.Speed = 0
-				t.FilePath = result.FilePath
-				t.FileName = result.FileName
+				t.FilePath = publishedPath
+				t.FileName = filepath.Base(publishedPath)
 				t.ContentType = result.ContentType
 				t.CancelFunc = nil
 			})
@@ -1358,11 +1378,15 @@ func downloadOnlineServerTaskToPath(ctx context.Context, taskID string) (*fetche
 		_ = os.Remove(task.TempPath)
 		return nil, err
 	}
+	downloadedPath := strings.TrimSuffix(task.TempPath, ".part")
+	if downloadedPath == task.TempPath {
+		downloadedPath = task.TempPath + ".done"
+	}
 
 	if err := file.Close(); err != nil {
 		return nil, err
 	}
-	if err := os.Rename(task.TempPath, task.FilePath); err != nil {
+	if err := os.Rename(task.TempPath, downloadedPath); err != nil {
 		return nil, err
 	}
 
@@ -1372,8 +1396,8 @@ func downloadOnlineServerTaskToPath(ctx context.Context, taskID string) (*fetche
 	}
 
 	return &fetchedOnlineTempFile{
-		FilePath:    task.FilePath,
-		FileName:    filepath.Base(task.FilePath),
+		FilePath:    downloadedPath,
+		FileName:    filepath.Base(downloadedPath),
 		ContentType: contentType,
 		Size:        written,
 	}, nil
@@ -1599,6 +1623,39 @@ func toggleOnlineServerDownloadTask(taskID string) (string, error) {
 	default:
 		return "", fmt.Errorf("task is not pausable")
 	}
+}
+
+func onlineDownloadStagingDir() string {
+	return filepath.Join(onlineSourcesRoot(), "staging")
+}
+
+func uniqueOnlineDownloadStagingPath(fileName string) string {
+	return uniqueOnlineDownloadPath(onlineDownloadStagingDir(), fileName)
+}
+
+func moveDownloadedFileToFinalPath(srcPath string, dstPath string) (string, error) {
+	if strings.TrimSpace(srcPath) == "" {
+		return "", fmt.Errorf("source path is empty")
+	}
+	if strings.TrimSpace(dstPath) == "" {
+		return "", fmt.Errorf("destination path is empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.Rename(srcPath, dstPath); err != nil {
+		if !errors.Is(err, syscall.EXDEV) {
+			return "", err
+		}
+		if copyErr := copyFile(srcPath, dstPath); copyErr != nil {
+			return "", copyErr
+		}
+		if removeErr := os.Remove(srcPath); removeErr != nil {
+			_ = os.Remove(dstPath)
+			return "", removeErr
+		}
+	}
+	return dstPath, nil
 }
 
 func retryAllOnlineServerDownloadTasks() {
@@ -2278,6 +2335,10 @@ func setOnlineDownloadTaskFailed(taskID string, err error) {
 	updateOnlineDownloadTask(taskID, func(task *onlineDownloadTask) {
 		task.Status = "failed"
 		task.Error = err.Error()
+		task.FilePath = ""
+		task.FileName = ""
+		task.TempPath = ""
+		task.ContentType = ""
 	})
 }
 
@@ -2372,19 +2433,25 @@ func runOnlineDownloadTask(taskID string, songSource string, normalized map[stri
 			})
 		})
 		if fetchErr == nil {
-			// Best-effort cover / metadata / lyrics embed. Failure
-			// here is logged and does not affect the task status —
-			// the user always sees a playable file.
-			//
-			// onlineEmbedEnabled reads the user's settings.json
-			// embedMode field via the embed entry point's own
-			// onlineEmbedMode() call. We log a "before" trace
-			// here so the user can grep their navidrome.log for
-			// [EMBED] browser-gate-ok / browser-gate-skipped and
-			// tell whether the gate passed.
+			// Embed success is part of task success when embed mode
+			// is enabled. Any metadata/lyric embed failure marks the
+			// task failed and removes the downloaded file.
 			embedTrace(context.Background(), "browser-gate-check", "task", taskID, "songSource", songSource, "mode", onlineEmbedMode())
+			finalPath := result.FilePath
 			if onlineEmbedEnabled() {
-				embedOnlineBrowserTaskWithScript(ctx, taskID, nil, candidate, normalized, songSource, quality, result.FilePath)
+				embeddedPath, embedErr := embedOnlineBrowserTaskWithScript(ctx, taskID, nil, candidate, normalized, songSource, quality, result.FilePath)
+				if embedErr != nil {
+					if embeddedPath != "" {
+						_ = os.Remove(embeddedPath)
+					} else if result.FilePath != "" {
+						_ = os.Remove(result.FilePath)
+					}
+					setOnlineDownloadTaskFailed(taskID, embedErr)
+					return
+				}
+				if embeddedPath != "" {
+					finalPath = embeddedPath
+				}
 			} else {
 				embedTrace(context.Background(), "browser-gate-skipped-mode-none", "task", taskID, "songSource", songSource)
 			}
@@ -2393,8 +2460,8 @@ func runOnlineDownloadTask(taskID string, songSource string, normalized map[stri
 				task.Progress = 100
 				task.Received = result.Size
 				task.Total = result.Size
-				task.FilePath = result.FilePath
-				task.FileName = result.FileName
+				task.FilePath = finalPath
+				task.FileName = filepath.Base(finalPath)
 				task.ContentType = result.ContentType
 			})
 			broadcastDownloadTaskChange()
