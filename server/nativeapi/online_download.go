@@ -76,6 +76,17 @@ type onlineDownloadResolveResult struct {
 	Error   string            `json:"error,omitempty"`
 }
 
+type onlineDownloadPermanentError struct {
+	msg string
+}
+
+func (e *onlineDownloadPermanentError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.msg
+}
+
 type onlineDownloadTask struct {
 	ID          string
 	Mode        string
@@ -310,7 +321,9 @@ process.stdin.on('end', async () => {
           path: parsed.pathname + parsed.search,
           method,
           headers,
-          rejectUnauthorized: false,
+			// Keep compatibility with existing source scripts and
+			// network environments (custom CA / TLS interception).
+			rejectUnauthorized: false,
         }, (res) => {
           if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirects > 0) {
             const nextUrl = new URL(res.headers.location, requestUrl).toString();
@@ -497,10 +510,11 @@ process.stdin.on('end', async () => {
   // are independent of the script's init phase so it's
   // safe to compute them up here.
   const requestedAction = (payload && payload.action) === 'lyric' ? 'lyric' : 'musicUrl';
-  const info = decontextify({
+	const isLocalSource = payload && payload.source === 'local';
+	const info = decontextify({
     musicInfo: payload.musicInfo || {},
     quality: payload.quality,
-    type: payload.quality,
+		type: isLocalSource ? null : payload.quality,
   });
   let inputData = { action: requestedAction, source: payload.source, info: info };
 
@@ -527,21 +541,35 @@ process.stdin.on('end', async () => {
     }
     const result = await requestHandler(inputData);
 
-    if (requestedAction === 'lyric') {
-      // Scripts that support a lyric handler return either a raw
-      // string (most common) or an object { lyric / lrc }. We
-      // normalize both shapes and serialize only the lyric field on
-      // stdout; the Go side reads the lyric field back.
-      const dResult = decontextify(result);
-      let lyricText = '';
-      if (typeof dResult === 'string') {
-        lyricText = dResult;
-      } else if (dResult && typeof dResult === 'object') {
-        lyricText = String(dResult.lyric || dResult.lrc || '');
-      }
-      process.stdout.write(JSON.stringify({ success: true, lyric: String(lyricText) }));
-      return;
-    }
+		if (requestedAction === 'lyric') {
+			// Scripts can return either:
+			//   - raw string (legacy): "..."
+			//   - object (template): { lyric, tlyric, rlyric, lxlyric }
+			//   - object (legacy alias): { lrc }
+			// Normalize into the full 4-field shape so the Go matcher can
+			// score every available variant and pick the best one.
+			const dResult = decontextify(result);
+			let lyricText = '';
+			let tlyricText = '';
+			let rlyricText = '';
+			let lxlyricText = '';
+			if (typeof dResult === 'string') {
+				lyricText = dResult;
+			} else if (dResult && typeof dResult === 'object') {
+				lyricText = String(dResult.lyric ?? dResult.lrc ?? '');
+				tlyricText = String(dResult.tlyric ?? dResult.tLyric ?? dResult.trans ?? '');
+				rlyricText = String(dResult.rlyric ?? dResult.rLyric ?? '');
+				lxlyricText = String(dResult.lxlyric ?? dResult.lxLyric ?? dResult.yrc ?? '');
+			}
+			process.stdout.write(JSON.stringify({
+				success: true,
+				lyric: String(lyricText),
+				tlyric: String(tlyricText),
+				rlyric: String(rlyricText),
+				lxlyric: String(lxlyricText),
+			}));
+			return;
+		}
 
 		let finalUrl = '';
 		let finalHeaders = null;
@@ -1911,6 +1939,10 @@ func resolveOnlineDownloadURLWithProgress(
 		if resolveErr == nil {
 			return url, headers, source.Name, nil
 		}
+		if shouldStopResolveRetry(resolveErr) {
+			lastErr = fmt.Errorf("attempt %d: %w", attempt, resolveErr)
+			break
+		}
 		lastErr = fmt.Errorf("attempt %d: %w", attempt, resolveErr)
 		if ctx.Err() != nil {
 			break
@@ -1951,12 +1983,66 @@ func executeOnlineDownloadScript(ctx context.Context, input onlineDownloadResolv
 		return "", nil, fmt.Errorf("invalid node response: %w", err)
 	}
 	if !result.Success {
-		return "", nil, fmt.Errorf("%s", strings.TrimSpace(result.Error))
+		msg := strings.TrimSpace(result.Error)
+		if isPermanentResolveError(msg) {
+			return "", nil, &onlineDownloadPermanentError{msg: msg}
+		}
+		return "", nil, fmt.Errorf("%s", msg)
 	}
-	if strings.TrimSpace(result.URL) == "" {
-		return "", nil, fmt.Errorf("empty resolved url")
+	resolvedURL := strings.TrimSpace(result.URL)
+	if resolvedURL == "" {
+		return "", nil, &onlineDownloadPermanentError{msg: "empty resolved url"}
 	}
-	return strings.TrimSpace(result.URL), result.Headers, nil
+	u, err := url.Parse(resolvedURL)
+	if err != nil {
+		return "", nil, &onlineDownloadPermanentError{msg: fmt.Sprintf("invalid resolved url: %v", err)}
+	}
+	if !isSupportedDownloadScheme(u.Scheme) {
+		return "", nil, &onlineDownloadPermanentError{msg: fmt.Sprintf("unsupported resolved url scheme: %s", u.Scheme)}
+	}
+	if strings.TrimSpace(u.Host) == "" {
+		return "", nil, &onlineDownloadPermanentError{msg: "resolved url missing host"}
+	}
+	return resolvedURL, result.Headers, nil
+}
+
+func shouldStopResolveRetry(err error) bool {
+	var permanent *onlineDownloadPermanentError
+	return errors.As(err, &permanent)
+}
+
+func isSupportedDownloadScheme(scheme string) bool {
+	switch strings.ToLower(strings.TrimSpace(scheme)) {
+	case "http", "https":
+		return true
+	default:
+		return false
+	}
+}
+
+func isPermanentResolveError(msg string) bool {
+	m := strings.ToLower(strings.TrimSpace(msg))
+	if m == "" {
+		return false
+	}
+	permanentSignals := []string{
+		"did not declare support",
+		"did not register a request handler",
+		"did not return a valid download url",
+		"returned an empty download url",
+		"invalid node response",
+		"invalid resolved url",
+		"unsupported resolved url scheme",
+		"resolved url missing host",
+		"the current script does not",
+		"require_unsafe_vm",
+	}
+	for _, s := range permanentSignals {
+		if strings.Contains(m, s) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeOnlineDownloadSongInfo(songInfo map[string]any) map[string]any {

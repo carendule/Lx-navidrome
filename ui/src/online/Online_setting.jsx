@@ -36,6 +36,7 @@ import {
 } from './Online_source_settings_api'
 
 const ONLINE_SOURCE_STATUS_CHANGED_EVENT = 'nd:online-source-status-changed'
+const LYRICA_DEFAULT_BASE_URL = 'https://wilooper-lyrica.hf.space'
 
 const useStyles = makeStyles((theme) => ({
   root: {
@@ -404,6 +405,10 @@ const OnlineSetting = () => {
   const [sources, setSources] = React.useState([])
   const [downloadPath, setDownloadPath] = React.useState('')
   const [savingDownloadPath, setSavingDownloadPath] = React.useState(false)
+  const [lyricaBaseURL, setLyricaBaseURL] = React.useState(
+    LYRICA_DEFAULT_BASE_URL,
+  )
+  const [savingLyricaBaseURL, setSavingLyricaBaseURL] = React.useState(false)
   // nameTemplate: chips the user has selected for the download
   // filename template (saved to settings). Defaults to [song title, artist].
   // The "available" row is derived as NAME_TEMPLATE_TOKENS minus
@@ -459,14 +464,22 @@ const OnlineSetting = () => {
     suspendAutoSaveRef.current = true
     Promise.all([
       httpClient('/api/online/source/settings')
-        .then(({ json }) =>
-          typeof json?.downloadPath === 'string' ? json.downloadPath : '',
-        )
-        .catch(() => ''),
+        .then(({ json }) => (json && typeof json === 'object' ? json : {}))
+        .catch(() => ({})),
       fetchOnlineNameTemplate(),
       fetchOnlineEmbedMode(),
-    ]).then(([path, template, mode]) => {
-      setDownloadPath(path)
+    ]).then(([settingsJSON, template, mode]) => {
+      setDownloadPath(
+        typeof settingsJSON?.downloadPath === 'string'
+          ? settingsJSON.downloadPath
+          : '',
+      )
+      setLyricaBaseURL(
+        typeof settingsJSON?.lyricaBaseURL === 'string' &&
+          settingsJSON.lyricaBaseURL.trim()
+          ? settingsJSON.lyricaBaseURL.trim()
+          : LYRICA_DEFAULT_BASE_URL,
+      )
       setNameTemplate(template)
       setEmbedMode(mode)
       // Re-enable auto-save on the next tick so the state updates
@@ -633,6 +646,41 @@ const OnlineSetting = () => {
         }, 0)
       })
   }, [downloadPath, notify])
+
+  const handleSaveLyricaBaseURL = React.useCallback(() => {
+    setSavingLyricaBaseURL(true)
+    httpClient('/api/online/source/settings', {
+      method: 'POST',
+      body: JSON.stringify({
+        lyricaBaseURL: lyricaBaseURL || LYRICA_DEFAULT_BASE_URL,
+      }),
+      headers: new Headers({ 'Content-Type': 'application/json' }),
+    })
+      .then(({ json }) => {
+        const persisted =
+          typeof json?.lyricaBaseURL === 'string' && json.lyricaBaseURL.trim()
+            ? json.lyricaBaseURL.trim()
+            : LYRICA_DEFAULT_BASE_URL
+        setLyricaBaseURL(persisted)
+        notify(
+          translate('online.lyricaBaseURLSaved', {
+            _: 'Lyrica address saved',
+          }),
+          'info',
+        )
+      })
+      .catch(() => {
+        notify(
+          translate('online.lyricaBaseURLSaveFailed', {
+            _: 'Failed to save Lyrica address',
+          }),
+          'warning',
+        )
+      })
+      .finally(() => {
+        setSavingLyricaBaseURL(false)
+      })
+  }, [lyricaBaseURL, notify, translate])
 
   // handleEmbedModeChange is the radio onChange callback for the
   // "Metadata embedding settings" section. The user-facing flow is:
@@ -1396,6 +1444,44 @@ const OnlineSetting = () => {
             _: 'Tip: drag tokens between rows. Selected-row order is used as filename template and saved automatically.',
           })}
         </Typography>
+      </div>
+
+      <div className={classes.settingsSection}>
+        <div className={classes.settingsTitle}>
+          <MdLibraryMusic className={classes.titleIcon} size={20} />
+          <Typography variant="h6">
+            {translate('online.lyricaSettingsTitle', {
+              _: 'Lyrica Settings',
+            })}
+          </Typography>
+        </div>
+        <TextField
+          className={classes.settingsField}
+          variant="outlined"
+          size="small"
+          label={translate('online.lyricaBaseURLLabel', {
+            _: 'Lyrica Base URL',
+          })}
+          value={lyricaBaseURL}
+          onChange={(event) => setLyricaBaseURL(event.target.value)}
+          placeholder={LYRICA_DEFAULT_BASE_URL}
+        />
+        <Typography variant="caption" className={classes.templateHintNote}>
+          {translate('online.lyricaBaseURLHint', {
+            _: 'Default: official Lyrica service. You can set your self-hosted Lyrica address here.',
+          })}
+        </Typography>
+        <div className={classes.saveButtonWrap}>
+          <Button
+            variant="contained"
+            color="primary"
+            className={classes.manageButton}
+            onClick={handleSaveLyricaBaseURL}
+            disabled={savingLyricaBaseURL}
+          >
+            {translate('online.saveLyricaBaseURL', { _: 'Save' })}
+          </Button>
+        </div>
       </div>
 
       {templateFloating.clip && (

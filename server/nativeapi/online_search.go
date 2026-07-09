@@ -2009,6 +2009,7 @@ if (mode === 'tags') {
 func (api *Router) addOnlineSearchRoutes(r chi.Router) {
 	r.Get("/online/search/hot", api.onlineHotSearch)
 	r.Get("/online/search", api.onlineSearch)
+	r.Get("/online/lyric/lyrica", api.onlineLyricaLyric)
 	r.Get("/online/playlist/tags", api.onlinePlaylistTags)
 	r.Get("/online/playlist/list", api.onlinePlaylistList)
 	r.Get("/online/playlist/search", api.onlinePlaylistSearch)

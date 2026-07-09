@@ -202,6 +202,30 @@ func strictOnlineEmbedDownloadedFile(
 		return audioPath, newOnlineEmbedFailure(onlineEmbedReasonMetadataFailed, fmt.Errorf("required metadata missing: title/artist/album"))
 	}
 
+	// Parallel enrichment of songInfo from Lyrica metadata API.
+	// This runs concurrently while we fetch the cover and lyrics,
+	// so it adds no latency to the embed pipeline.
+	// We use a WaitGroup to ensure Lyrica enrichment completes
+	// before we start embedding metadata into the audio file.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		embedTrace(ctx, "metadata:lyrica-fetch-start", "title", title, "artist", artist)
+		lyricaMeta, err := fetchOnlineEmbedMetadataViaLyrica(ctx, title, artist)
+		if err != nil {
+			embedTrace(ctx, "metadata:lyrica-fetch-failed", "error", err.Error())
+			return
+		}
+		if lyricaMeta == nil {
+			embedTrace(ctx, "metadata:lyrica-nil")
+			return
+		}
+		embedTrace(ctx, "metadata:lyrica-fetched", "fields", fmt.Sprintf("%v", getMapKeys(lyricaMeta)))
+		onlineEmbedEnrichSongInfoWithLyricaMetadata(songInfo, lyricaMeta)
+		embedTrace(ctx, "metadata:lyrica-enriched", "title", title, "artist", artist)
+	}()
+
 	coverURL := pickOnlineEmbedCoverURL(songInfo)
 	if strings.TrimSpace(coverURL) == "" {
 		return audioPath, newOnlineEmbedFailure(onlineEmbedReasonMetadataFailed, fmt.Errorf("cover url missing"))
@@ -216,6 +240,11 @@ func strictOnlineEmbedDownloadedFile(
 	if embedMode == embedModeAll {
 		lyric, _ = fetchOnlineEmbedLyric(ctx, candidate, songSource, songInfo, quality)
 	}
+
+	// Wait for Lyrica metadata enrichment to complete before embedding
+	embedTrace(ctx, "metadata:wait-for-lyrica-start")
+	wg.Wait()
+	embedTrace(ctx, "metadata:wait-for-lyrica-done")
 
 	_, finalPath, err := onlineEmbedDownloadMetadata(ctx, audioPath, songInfo, quality, coverRef, lyric)
 	finalPath, err = strictOnlineEmbedHandleResult(audioPath, finalPath, err)
@@ -353,16 +382,11 @@ func persistOnlineEmbedCover(downloadDir, taskID, mime string, body []byte) (str
 //     matcher is applied, so we only accept it when title/artist/
 //     duration evidence is good enough.
 //
-//  3. The Go client with multi-source fallback LAST.
-//     We try wy / kg / kw / tx / mg in order (see
-//     onlineLyricFallbackOrder), and accept the first
-//     candidate whose [ti:]/[ar:] tags + duration match
-//     the song we downloaded. A single source frequently
-//     has no lyric for a song that another source
-//     happily serves; the cross-source check (see
-//     online_lyric_match.go) is what makes this safe — we
-//     don't accept a tag-less lyric from a single source
-//     without checking the others first.
+//  3. Lyrica search fallback LAST.
+//     We query the configured Lyrica service using the song
+//     title + artist and force `timestamps=true` and
+//     `fast=true` to prefer a timed lyric result with a
+//     single upstream pass.
 //
 // The matcher is the safety net: a lyric from the "wrong
 // song with the same title" can quietly slip in if we
@@ -380,6 +404,11 @@ func fetchOnlineEmbedLyric(ctx context.Context, source onlineSource, songSource 
 	// lyric fetch was attempted at all.
 	embedTrace(ctx, "lyric:fetch-attempt", "songSource", songSource, "candidate", source.ID, "quality", quality, "hasName", stringValue(songInfo["name"]) != "", "hasSongmid", stringValue(songInfo["songmid"]) != "")
 
+	bestEffortText := ""
+	bestEffortPriority := 0
+	bestEffortLabel := ""
+	bestEffortSource := ""
+
 	// 1) User-supplied lx-music script. The script is
 	// invoked with action='lyric' and may return a lyric
 	// string. We then run the matcher: scripts are most
@@ -388,111 +417,105 @@ func fetchOnlineEmbedLyric(ctx context.Context, source onlineSource, songSource 
 	// mis-identification is still possible. If the
 	// matcher's score is OK we take the result and
 	// skip the rest of the fallback run.
+	embedTrace(ctx, "lyric:priority-attempt", "priority", 1, "label", "script", "source", source.ID)
 	if out, ok := fetchOnlineEmbedLyricViaScriptOk(ctx, source, songSource, songInfo, quality); ok {
-		if accepted, ok := onlineEmbedAcceptLyricCandidate(ctx, "script:"+source.ID, out, songInfo); ok {
+		if accepted, ok := onlineEmbedAcceptLyricResultCandidate(ctx, "script:"+source.ID, out, songInfo); ok {
+			embedTrace(ctx, "lyric:priority-selected", "priority", 1, "label", "script", "source", source.ID, "lyricLen", len(accepted))
 			return accepted, nil
+		}
+		if bestEffortText == "" {
+			if fallback := onlineEmbedBestEffortLyricFromResult(out); fallback != "" {
+				bestEffortText = fallback
+				bestEffortPriority = 1
+				bestEffortLabel = "script"
+				bestEffortSource = source.ID
+			}
 		}
 	}
 
 	// 2) songInfo.meta.lrcUrl fallback. This path is now shared by
 	// all embed flows (server/browser/playlist sync), but still goes
 	// through the same matcher before we accept it.
+	embedTrace(ctx, "lyric:priority-attempt", "priority", 2, "label", "meta.lrcUrl")
 	if out := lookupOnlineBrowserLyricFromSongInfo(ctx, songInfo); strings.TrimSpace(out) != "" {
-		if accepted, ok := onlineEmbedAcceptLyricCandidate(ctx, "meta.lrcUrl", out, songInfo); ok {
+		if accepted, ok := onlineEmbedAcceptLyricResultCandidate(ctx, "meta.lrcUrl", onlineLyricResult{Lyric: out}, songInfo); ok {
+			embedTrace(ctx, "lyric:priority-selected", "priority", 2, "label", "meta.lrcUrl", "lyricLen", len(accepted))
 			return accepted, nil
+		}
+		if bestEffortText == "" {
+			bestEffortText = strings.TrimSpace(out)
+			bestEffortPriority = 2
+			bestEffortLabel = "meta.lrcUrl"
 		}
 	} else {
 		embedTrace(ctx, "lyric:meta-lrc-empty", "songName", stringValue(songInfo["name"]))
 	}
 
-	// 3) Multi-source Go client fallback. Iterates
-	// onlineLyricFallbackOrder and accepts the first
-	// candidate the matcher approves. The trace line at
-	// the end of the run summarizes every attempt so
-	// the user can see exactly which sources fired,
-	// which produced a lyric, and which (if any) the
-	// matcher accepted.
-	lyric, attempts := onlineLyricFallback(ctx, songInfo)
-	accepted := ""
-	for _, a := range attempts {
-		if a.Accepted {
-			accepted = a.Source
+	// 3) Lyrica service fallback. If the service returns a
+	// usable lyric text, run the same matcher gate before
+	// accepting the result.
+	embedTrace(ctx, "lyric:priority-attempt", "priority", 3, "label", "lyrica")
+	if out, ok := fetchOnlineEmbedLyricViaLyrica(ctx, songInfo); ok {
+		if accepted, ok := onlineEmbedAcceptLyricCandidate(ctx, "lyrica", out, songInfo); ok {
+			embedTrace(ctx, "lyric:priority-selected", "priority", 3, "label", "lyrica", "lyricLen", len(accepted))
+			return accepted, nil
+		}
+		if bestEffortText == "" {
+			bestEffortText = strings.TrimSpace(out)
+			bestEffortPriority = 3
+			bestEffortLabel = "lyrica"
 		}
 	}
-	embedTrace(ctx, "lyric:fallback-result",
-		"acceptedSource", accepted,
-		"finalLen", len(lyric),
-		"attemptCount", len(attempts),
-		"attempts", onlineLyricMatchAttemptsTraceValue(attempts),
-	)
-	if lyric != "" {
-		return lyric, nil
+
+	if bestEffortText != "" {
+		embedTrace(ctx, "lyric:priority-selected", "priority", bestEffortPriority, "label", bestEffortLabel, "source", bestEffortSource, "mode", "best-effort-unmatched", "lyricLen", len(bestEffortText))
+		return bestEffortText, nil
 	}
-	// Trace the empty-result case so the user can tell
-	// whether the per-source fetchers ran but returned
-	// nothing (the [EMBED] lyric:dispatch lines above
-	// will have fired with each source key) or whether
-	// the dispatcher never matched (in which case the
-	// dispatch trace will show source=… and
-	// supported=false). Either way the embed step
-	// falls through to ffmpeg without a lyrics frame.
+	// Trace the empty-result case so users can confirm the
+	// three-step chain ran but yielded no accepted lyric.
 	embedTrace(ctx, "lyric:all-paths-empty", "songName", stringValue(songInfo["name"]), "songmid", stringValue(songInfo["songmid"]))
 	return "", nil
 }
 
 func onlineEmbedAcceptLyricCandidate(ctx context.Context, source string, lyric string, songInfo map[string]any) (string, bool) {
-	text := strings.TrimSpace(lyric)
-	if text == "" {
-		return "", false
-	}
-	cand := onlineLyricCandidate{Source: source, Lyric: text}
-	cand.SelfTitle, cand.SelfArtist, cand.SelfAlbum = onlineLyricParseIDTags(text)
-	cand.LyricDurSec = onlineLyricMaxTimeTagSeconds(text)
-	score := onlineLyricMatchScoreLyric(songInfo, cand)
-	if !score.OK {
-		embedTrace(ctx, "lyric:candidate-rejected", "source", source, "lyricLen", len(text), "reason", score.Reason, "titleScore", score.TitleScore, "artistScore", score.ArtistScore, "durationDelta", score.DurationDelta)
-		return "", false
-	}
-	embedTrace(ctx, "lyric:candidate-accepted", "source", source, "lyricLen", len(text), "titleScore", score.TitleScore, "artistScore", score.ArtistScore, "durationDelta", score.DurationDelta)
-	return text, true
+	return onlineEmbedAcceptLyricResultCandidate(ctx, source, onlineLyricResult{Lyric: lyric}, songInfo)
 }
 
-// onlineLyricMatchAttemptsTraceValue formats the per-attempt
-// summary as a compact key=value list suitable for the
-// embedTrace helper. The helper is a separate function (not
-// inlined) so we can keep the call site readable and add
-// per-attempt formatting tweaks in one place.
-//
-// Format: "src:tScore/aScore/dDelta=reason" — the three
-// numeric scores come FIRST so the user can grep for
-// borderline cases ("t=50/a=100/d=0" = artist nailed it but
-// the title has a version suffix). Without the numbers, a
-// single "title tag did not match" reason was opaque —
-// the user couldn't tell whether the lyric was the wrong
-// song (rejection correct) or a same-song different
-// source-tagger that just labeled it slightly differently
-// (rejection wrong).
-func onlineLyricMatchAttemptsTraceValue(attempts []onlineLyricMatchAttempt) string {
-	if len(attempts) == 0 {
-		return "<none>"
+func onlineEmbedBestEffortLyricFromResult(res onlineLyricResult) string {
+	for _, text := range []string{res.Lyric, res.TLyric, res.RLyric, res.LXLyric} {
+		if v := strings.TrimSpace(text); v != "" {
+			return v
+		}
 	}
-	parts := make([]string, 0, len(attempts))
-	for _, a := range attempts {
-		ts := "na"
-		if a.TitleScore >= 0 {
-			ts = strconv.Itoa(a.TitleScore)
-		}
-		as_ := "na"
-		if a.ArtistScore >= 0 {
-			as_ = strconv.Itoa(a.ArtistScore)
-		}
-		dd := "na"
-		if a.DurationDelta >= 0 {
-			dd = strconv.Itoa(a.DurationDelta)
-		}
-		parts = append(parts, a.Source+":t="+ts+"/a="+as_+"/d="+dd+"="+a.Reason)
+	return ""
+}
+
+func onlineEmbedAcceptLyricResultCandidate(ctx context.Context, source string, res onlineLyricResult, songInfo map[string]any) (string, bool) {
+	cands := onlineLyricCandidatesFromResult(source, res)
+	if len(cands) == 0 {
+		return "", false
 	}
-	return strings.Join(parts, ",")
+	bestText := ""
+	bestRank := -1
+	bestKind := ""
+	for _, cand := range cands {
+		score := onlineLyricMatchScoreLyric(songInfo, cand)
+		if !score.OK {
+			embedTrace(ctx, "lyric:candidate-rejected", "source", source, "kind", cand.Kind, "lyricLen", len(cand.Lyric), "reason", score.Reason, "titleScore", score.TitleScore, "artistScore", score.ArtistScore, "durationDelta", score.DurationDelta)
+			continue
+		}
+		rank := onlineLyricAcceptedRank(cand, score)
+		if rank > bestRank {
+			bestRank = rank
+			bestText = cand.Lyric
+			bestKind = cand.Kind
+		}
+	}
+	if bestText == "" {
+		return "", false
+	}
+	embedTrace(ctx, "lyric:candidate-accepted", "source", source, "kind", bestKind, "lyricLen", len(bestText), "rank", bestRank)
+	return bestText, true
 }
 
 // fetchOnlineEmbedLyricViaScriptOk is a thin wrapper over
@@ -504,27 +527,27 @@ func onlineLyricMatchAttemptsTraceValue(attempts []onlineLyricMatchAttempt) stri
 // crashed, etc.). The wrapper exists so the orchestrator
 // can fall back to the Go client without a separate
 // "did we get a lyric" probe at the call site.
-func fetchOnlineEmbedLyricViaScriptOk(ctx context.Context, source onlineSource, songSource string, songInfo map[string]any, quality string) (string, bool) {
+func fetchOnlineEmbedLyricViaScriptOk(ctx context.Context, source onlineSource, songSource string, songInfo map[string]any, quality string) (onlineLyricResult, bool) {
 	out, err := fetchOnlineEmbedLyricViaScript(ctx, source, songSource, songInfo, quality)
 	if err != nil {
-		return "", false
+		return onlineLyricResult{}, false
 	}
-	if strings.TrimSpace(out) == "" {
-		return "", false
+	if !onlineLyricResultHasAny(out) {
+		return onlineLyricResult{}, false
 	}
 	return out, true
 }
 
-func fetchOnlineEmbedLyricViaScript(ctx context.Context, source onlineSource, songSource string, songInfo map[string]any, quality string) (string, error) {
+func fetchOnlineEmbedLyricViaScript(ctx context.Context, source onlineSource, songSource string, songInfo map[string]any, quality string) (onlineLyricResult, error) {
 	if !commandExists("node") {
 		embedTrace(ctx, "lyric:no-node", "source", source.ID)
-		return "", nil
+		return onlineLyricResult{}, nil
 	}
 	scriptPath := filepath.Join(onlineScriptsDir(), source.ID)
 	scriptContent, err := os.ReadFile(scriptPath)
 	if err != nil {
 		embedTrace(ctx, "lyric:no-script", "source", source.ID, "path", scriptPath, "err", err.Error())
-		return "", nil
+		return onlineLyricResult{}, nil
 	}
 	embedTrace(ctx, "lyric:dispatching", "source", source.ID, "songSource", songSource, "quality", quality)
 
@@ -537,7 +560,7 @@ func fetchOnlineEmbedLyricViaScript(ctx context.Context, source onlineSource, so
 		"action":      "lyric",
 	})
 	if err != nil {
-		return "", err
+		return onlineLyricResult{}, err
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, onlineEmbedLyricTimeout)
@@ -554,7 +577,7 @@ func fetchOnlineEmbedLyricViaScript(ctx context.Context, source onlineSource, so
 	if err := cmd.Run(); err != nil {
 		// Lyric is best-effort; don't propagate script errors.
 		embedTrace(ctx, "lyric:node-failed", "source", source.ID, "err", err.Error(), "stderr", strings.TrimSpace(stderr.String()))
-		return "", nil
+		return onlineLyricResult{}, nil
 	}
 	embedTrace(ctx, "lyric:node-ok", "source", source.ID, "stdoutLen", stdout.Len())
 
@@ -568,10 +591,13 @@ func fetchOnlineEmbedLyricViaScript(ctx context.Context, source onlineSource, so
 		Error   string `json:"error"`
 		Lyric   string `json:"lyric"`
 		LRC     string `json:"lrc"`
+		TLyric  string `json:"tlyric"`
+		RLyric  string `json:"rlyric"`
+		LXLyric string `json:"lxlyric"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
 		embedTrace(ctx, "lyric:bad-json", "source", source.ID, "err", err.Error())
-		return "", nil
+		return onlineLyricResult{}, nil
 	}
 	if !resp.Success {
 		// Distinguish two failure modes that previously
@@ -608,13 +634,18 @@ func fetchOnlineEmbedLyricViaScript(ctx context.Context, source onlineSource, so
 			errTag = "lyric-not-found"
 		}
 		embedTrace(ctx, "lyric:script-said-fail", "source", source.ID, "errTag", errTag, "err", resp.Error)
-		return "", nil
+		return onlineLyricResult{}, nil
 	}
-	out := strings.TrimSpace(resp.Lyric)
-	if out == "" {
-		out = strings.TrimSpace(resp.LRC)
+	out := onlineLyricResult{
+		Lyric:   strings.TrimSpace(resp.Lyric),
+		TLyric:  strings.TrimSpace(resp.TLyric),
+		RLyric:  strings.TrimSpace(resp.RLyric),
+		LXLyric: strings.TrimSpace(resp.LXLyric),
 	}
-	embedTrace(ctx, "lyric:done", "source", source.ID, "lyricLen", len(out))
+	if out.Lyric == "" {
+		out.Lyric = strings.TrimSpace(resp.LRC)
+	}
+	embedTrace(ctx, "lyric:done", "source", source.ID, "lyricLen", len(out.Lyric), "tlyricLen", len(out.TLyric), "rlyricLen", len(out.RLyric), "lxlyricLen", len(out.LXLyric))
 	return out, nil
 }
 
@@ -855,6 +886,15 @@ func onlineEmbedDownloadMetadata(
 	// Vorbis Comments automatically.
 	onlineEmbedAppendTagMetadataArgs(&args, songInfo, quality)
 
+	// Log the extracted metadata values for debugging
+	embedTrace(ctx, "metadata:extracted",
+		"title", onlineEmbedFirstNonEmpty(songInfo, "name", "songName", "title"),
+		"artist", onlineEmbedFirstNonEmpty(songInfo, "singer", "singerName", "artist"),
+		"album", onlineEmbedFirstNonEmpty(songInfo, "albumName", "album", "albumname"),
+		"year", onlineEmbedNormalizeYearTag(onlineEmbedFirstNonEmpty(songInfo, "year", "releaseYear", "release_year")),
+		"genre", onlineEmbedFirstNonEmpty(songInfo, "genre", "style"),
+		"date", onlineEmbedNormalizeDateTag(onlineEmbedFirstNonEmpty(songInfo, "date", "publishDate", "publishTime", "pubTime", "pub_time", "releaseDate", "time_public")))
+
 	if result.HadLyric && format != "mp3" {
 		// For FLAC and M4A, ffmpeg writes the lyrics into
 		// the standard container-native field:
@@ -908,7 +948,18 @@ func onlineEmbedDownloadMetadata(
 
 	_ = formatName // used above when constructing tmpPath
 
+	// Log all metadata arguments being passed to ffmpeg
+	var metadataArgs []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-metadata" && i+1 < len(args) {
+			metadataArgs = append(metadataArgs, args[i+1])
+			i++
+		}
+	}
+	embedTrace(ctx, "ffmpeg:metadata-args", "count", len(metadataArgs), "args", fmt.Sprintf("%v", metadataArgs))
+
 	runFFmpeg := func(ffArgs []string) (string, error) {
+		embedTrace(ctx, "ffmpeg:execute", "argCount", len(ffArgs))
 		cmd := exec.CommandContext(ctx, cmdPath, ffArgs...)
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
@@ -1133,7 +1184,8 @@ func onlineEmbedAppendTagMetadataArgs(args *[]string, songInfo map[string]any, q
 	genre := onlineEmbedFirstNonEmpty(songInfo, "genre", "style")
 	track := onlineEmbedNormalizeTrackOrDiscTag(onlineEmbedFirstNonEmpty(songInfo, "track", "trackNo", "trackNumber", "trackNum", "songNo", "no"))
 	disc := onlineEmbedNormalizeTrackOrDiscTag(onlineEmbedFirstNonEmpty(songInfo, "disc", "discNo", "discNumber", "cdSerial", "discnum", "cdNum"))
-	date := onlineEmbedNormalizeDateTag(onlineEmbedFirstNonEmpty(songInfo, "date", "publishDate", "publishTime", "pubTime", "pub_time", "releaseDate", "time_public", "year"))
+	year := onlineEmbedNormalizeYearTag(onlineEmbedFirstNonEmpty(songInfo, "year", "releaseYear", "release_year"))
+	date := onlineEmbedNormalizeDateTag(onlineEmbedFirstNonEmpty(songInfo, "date", "publishDate", "publishTime", "pubTime", "pub_time", "releaseDate", "time_public"))
 	bpm := onlineEmbedNormalizeBPMTag(onlineEmbedFirstNonEmpty(songInfo, "bpm"))
 	language := onlineEmbedFirstNonEmpty(songInfo, "language", "lang")
 	isrc := onlineEmbedFirstNonEmpty(songInfo, "isrc")
@@ -1163,6 +1215,9 @@ func onlineEmbedAppendTagMetadataArgs(args *[]string, songInfo map[string]any, q
 	}
 	if disc != "" {
 		*args = append(*args, "-metadata", "disc="+disc)
+	}
+	if year != "" {
+		*args = append(*args, "-metadata", "year="+year)
 	}
 	if date != "" {
 		*args = append(*args, "-metadata", "date="+date)
@@ -1312,6 +1367,33 @@ func onlineEmbedNormalizeBPMTag(raw string) string {
 		return ""
 	}
 	return strconv.Itoa(n)
+}
+
+func onlineEmbedNormalizeYearTag(raw string) string {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return ""
+	}
+
+	// Year should be 4 digits
+	if len(v) != 4 {
+		return ""
+	}
+
+	// All characters must be digits
+	for i := 0; i < len(v); i++ {
+		if v[i] < '0' || v[i] > '9' {
+			return ""
+		}
+	}
+
+	// Parse and validate year range (1900-2099 for safety)
+	year, err := strconv.Atoi(v)
+	if err != nil || year < 1900 || year > 2099 {
+		return ""
+	}
+
+	return v
 }
 
 func onlineEmbedMode() string {
@@ -1697,4 +1779,283 @@ func onlineEmbedResizeCover(ctx context.Context, srcPath, dstPath string) (int64
 func commandExists(name string) bool {
 	_, err := exec.LookPath(name)
 	return err == nil
+}
+
+func fetchOnlineEmbedMetadataViaLyrica(ctx context.Context, title, artist string) (map[string]any, error) {
+	if strings.TrimSpace(title) == "" {
+		return nil, fmt.Errorf("title is required")
+	}
+
+	q := url.Values{}
+	q.Set("song", title)
+	if strings.TrimSpace(artist) != "" {
+		q.Set("artist", artist)
+	}
+
+	endpoint := lyricaBaseURL() + "/metadata/?" + q.Encode()
+	embedTrace(ctx, "lyrica:request", "endpoint", endpoint, "title", title, "artist", artist)
+
+	client := &http.Client{Timeout: onlineEmbedLyricTimeout}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		embedTrace(ctx, "lyrica:request-build-failed", "error", err.Error())
+		return nil, fmt.Errorf("metadata request build failed: %w", err)
+	}
+	req.Header.Set("User-Agent", "Navidrome/1.0")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		embedTrace(ctx, "lyrica:request-failed", "error", err.Error())
+		return nil, fmt.Errorf("metadata request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	embedTrace(ctx, "lyrica:response-status", "statusCode", resp.StatusCode)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		embedTrace(ctx, "lyrica:http-error", "statusCode", resp.StatusCode)
+		return nil, fmt.Errorf("metadata request failed: status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
+	if err != nil {
+		embedTrace(ctx, "lyrica:read-failed", "error", err.Error())
+		return nil, fmt.Errorf("metadata read failed: %w", err)
+	}
+	if len(body) > 1*1024*1024 {
+		embedTrace(ctx, "lyrica:response-too-large", "size", len(body))
+		return nil, fmt.Errorf("metadata response too large")
+	}
+
+	// Try parsing as wrapped response structure: {status, metadata, sources, ...}
+	var wrappedResp struct {
+		Status    string         `json:"status"`
+		Metadata  map[string]any `json:"metadata"`
+		Error     string         `json:"error"`
+		Sources   []string       `json:"sources"`
+		Timestamp string         `json:"timestamp"`
+	}
+
+	if err := json.Unmarshal(body, &wrappedResp); err == nil {
+		embedTrace(ctx, "lyrica:parsed-as-wrapped", "status", wrappedResp.Status, "hasMetadata", wrappedResp.Metadata != nil)
+
+		if wrappedResp.Status != "" {
+			// This looks like a wrapped response
+			if wrappedResp.Status != "success" {
+				embedTrace(ctx, "lyrica:status-not-success", "status", wrappedResp.Status, "error", wrappedResp.Error)
+				return nil, fmt.Errorf("metadata status: %s (error: %s)", wrappedResp.Status, wrappedResp.Error)
+			}
+
+			if wrappedResp.Metadata == nil {
+				embedTrace(ctx, "lyrica:wrapped-metadata-is-nil")
+				return nil, fmt.Errorf("metadata is nil")
+			}
+
+			embedTrace(ctx, "lyrica:wrapped-success", "metadataKeys", fmt.Sprintf("%v", getMapKeys(wrappedResp.Metadata)))
+			return wrappedResp.Metadata, nil
+		}
+	}
+
+	// Try parsing as direct metadata object
+	var directResp map[string]any
+	if err := json.Unmarshal(body, &directResp); err == nil {
+		embedTrace(ctx, "lyrica:parsed-as-direct", "keys", fmt.Sprintf("%v", getMapKeys(directResp)))
+
+		if len(directResp) == 0 {
+			embedTrace(ctx, "lyrica:direct-response-empty")
+			return nil, fmt.Errorf("metadata response is empty")
+		}
+
+		// Check if this looks like metadata (has expected fields)
+		hasMetadataFields := false
+		metadataKeys := []string{"title", "artist", "album", "release_year", "tags", "release_date", "cover_art"}
+		for _, key := range metadataKeys {
+			if _, ok := directResp[key]; ok {
+				hasMetadataFields = true
+				break
+			}
+		}
+
+		if hasMetadataFields {
+			embedTrace(ctx, "lyrica:direct-success")
+			return directResp, nil
+		}
+
+		// Might be an error response
+		if errMsg, ok := directResp["error"]; ok {
+			embedTrace(ctx, "lyrica:direct-error", "error", fmt.Sprintf("%v", errMsg))
+			return nil, fmt.Errorf("metadata error: %v", errMsg)
+		}
+	}
+
+	// If we get here, couldn't parse the response
+	bodyPreview := string(body)
+	if len(bodyPreview) > 200 {
+		bodyPreview = bodyPreview[:200] + "..."
+	}
+	embedTrace(ctx, "lyrica:parse-failed", "bodyPreview", bodyPreview)
+
+	return nil, fmt.Errorf("metadata decode failed: couldn't parse response")
+}
+
+// onlineEmbedEnrichSongInfoWithLyricaMetadata updates songInfo with
+// fields from Lyrica's metadata API response. Only fills in gaps —
+// fields that are already set in songInfo are left untouched. This
+// ensures the primary source (script, upstream API) always takes
+// precedence over the Lyrica fallback.
+//
+// Lyrica metadata field names are mapped to songInfo's canonical
+// keys:
+//
+//   - Lyrica "title" → songInfo["name"]
+//   - Lyrica "artist" → songInfo["singer"]
+//   - Lyrica "album" → songInfo["albumName"]
+//   - Lyrica "genre" → songInfo["genre"]
+//   - Lyrica "tags" (array) → songInfo["genre"] (joined by comma)
+//   - Lyrica "release_date" → songInfo["date"]
+//   - Lyrica "release_year" → songInfo["year"]
+//   - Lyrica "producer" → songInfo["composer"]
+//   - Lyrica "writer" → songInfo["composer"] (if producer missing)
+//   - Lyrica "cover_art" → songInfo["img"] (if no cover exists)
+//
+// The function is safe to call with nil or incomplete data.
+func onlineEmbedEnrichSongInfoWithLyricaMetadata(songInfo map[string]any, lyricaMeta map[string]any) {
+	if songInfo == nil || lyricaMeta == nil {
+		return
+	}
+
+	// Map Lyrica field names to songInfo keys with fallback priority
+	enrichField := func(songInfoKey string, lyricaKeys ...string) {
+		// Skip if songInfo already has this field set
+		if v := stringValue(songInfo[songInfoKey]); strings.TrimSpace(v) != "" {
+			return
+		}
+
+		// Try each Lyrica key in order
+		for _, lyricaKey := range lyricaKeys {
+			if v := stringValue(lyricaMeta[lyricaKey]); strings.TrimSpace(v) != "" {
+				songInfo[songInfoKey] = strings.TrimSpace(v)
+				return
+			}
+		}
+	}
+
+	// Enrich basic fields
+	enrichField("name", "title", "song")
+	enrichField("singer", "artist")
+	enrichField("albumName", "album")
+	enrichField("date", "release_date")
+
+	// For year, prefer release_year over year string
+	if v := stringValue(songInfo["year"]); strings.TrimSpace(v) == "" {
+		if releaseYear := lyricaMeta["release_year"]; releaseYear != nil {
+			// Handle both int and string types from Lyrica
+			var yearStr string
+			switch rv := releaseYear.(type) {
+			case float64:
+				if rv > 0 && rv < 10000 {
+					yearStr = strconv.FormatFloat(rv, 'f', 0, 64)
+				}
+			case int:
+				if rv > 0 && rv < 10000 {
+					yearStr = strconv.Itoa(rv)
+				}
+			case string:
+				yearStr = strings.TrimSpace(rv)
+			}
+			if yearStr != "" {
+				songInfo["year"] = yearStr
+			}
+		}
+	}
+
+	// For genre, try direct genre field first, then tags array
+	if v := stringValue(songInfo["genre"]); strings.TrimSpace(v) == "" {
+		if genre := stringValue(lyricaMeta["genre"]); strings.TrimSpace(genre) != "" {
+			songInfo["genre"] = strings.TrimSpace(genre)
+		} else if tags := lyricaMeta["tags"]; tags != nil {
+			// Handle tags as an array and join with comma
+			if tagStr := onlineEmbedExtractGenreFromTags(tags); tagStr != "" {
+				songInfo["genre"] = tagStr
+			}
+		}
+	}
+
+	// For composer, prefer producer over writer
+	if v := stringValue(songInfo["composer"]); strings.TrimSpace(v) == "" {
+		if producer := stringValue(lyricaMeta["producer"]); strings.TrimSpace(producer) != "" {
+			songInfo["composer"] = strings.TrimSpace(producer)
+		} else if writer := stringValue(lyricaMeta["writer"]); strings.TrimSpace(writer) != "" {
+			songInfo["composer"] = strings.TrimSpace(writer)
+		}
+	}
+
+	// For cover art, only use if img is not already set
+	if v := stringValue(songInfo["img"]); strings.TrimSpace(v) == "" {
+		if coverArt := stringValue(lyricaMeta["cover_art"]); strings.TrimSpace(coverArt) != "" {
+			songInfo["img"] = strings.TrimSpace(coverArt)
+		}
+	}
+
+	// Enrich optional meta fields if meta object exists
+	// This preserves backward compatibility with scripts that
+	// populate meta.lrcUrl, meta.picUrl, etc.
+	meta := mapValue(songInfo["meta"])
+	if meta == nil {
+		meta = make(map[string]any)
+		songInfo["meta"] = meta
+	}
+
+	// Only enrich if not already set in meta
+	if v := stringValue(meta["picUrl"]); strings.TrimSpace(v) == "" {
+		if coverArt := stringValue(lyricaMeta["cover_art"]); strings.TrimSpace(coverArt) != "" {
+			meta["picUrl"] = strings.TrimSpace(coverArt)
+		}
+	}
+}
+
+// onlineEmbedExtractGenreFromTags converts a tags array from Lyrica
+// metadata into a comma-separated genre string. Handles both string
+// arrays and other array types gracefully.
+func onlineEmbedExtractGenreFromTags(tags any) string {
+	if tags == nil {
+		return ""
+	}
+
+	// Handle slice of strings or slice of interfaces
+	switch t := tags.(type) {
+	case []string:
+		var result []string
+		for _, tag := range t {
+			if trimmed := strings.TrimSpace(tag); trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+		if len(result) > 0 {
+			return strings.Join(result, ", ")
+		}
+	case []any:
+		var result []string
+		for _, tag := range t {
+			if tagStr := stringValue(tag); strings.TrimSpace(tagStr) != "" {
+				result = append(result, strings.TrimSpace(tagStr))
+			}
+		}
+		if len(result) > 0 {
+			return strings.Join(result, ", ")
+		}
+	}
+
+	return ""
+}
+
+func getMapKeys(m map[string]any) []string {
+	if m == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

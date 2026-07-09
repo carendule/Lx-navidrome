@@ -323,11 +323,11 @@ func onlineLyricDecodeHTMLEntities(s string) string {
 	}
 	// Named entities. The order matters: &amp; last so a
 	// sequence like &amp;lt; doesn't get double-decoded.
-	s = strings.ReplaceAll(s, "&amp;", "&")
 	s = strings.ReplaceAll(s, "&lt;", "<")
 	s = strings.ReplaceAll(s, "&gt;", ">")
 	s = strings.ReplaceAll(s, "&quot;", `"`)
 	s = strings.ReplaceAll(s, "&apos;", "'")
+	s = strings.ReplaceAll(s, "&amp;", "&")
 	return s
 }
 
@@ -379,6 +379,7 @@ func fetchOnlineLyricKW(ctx context.Context, songInfo map[string]any) onlineLyri
 		embedTrace(ctx, "lyric:kw:parse-failed")
 		return onlineLyricResult{}
 	}
+	parsed.LXLyric = parsed.Lyric
 	// Strip per-word timing from the public lyric. The
 	// user-facing LRC is just the time tags + the line text.
 	wordTimeRxp := regexp.MustCompile(`<-?\d+,-?\d+(?:,-?\d+)?>`)
@@ -688,10 +689,11 @@ func onlineLyricKRCDecode(b64 string) onlineLyricResult {
 	// generate lxlyric (the embed step doesn't render it),
 	// we only produce the time-tagged lyric.
 	wordTimeRxp := regexp.MustCompile(`<(\d+,\d+)(?:,-?\d+)?>`)
-	out = wordTimeRxp.ReplaceAllString(out, "<$1>")
-	out = regexp.MustCompile(`<\d+,\d+>`).ReplaceAllString(out, "")
-	out = onlineLyricDecodeHTMLEntities(out)
-	return onlineLyricResult{Lyric: out}
+	lx := wordTimeRxp.ReplaceAllString(out, "<$1>")
+	plainText := regexp.MustCompile(`<\d+,\d+>`).ReplaceAllString(lx, "")
+	plainText = onlineLyricDecodeHTMLEntities(plainText)
+	lx = onlineLyricDecodeHTMLEntities(lx)
+	return onlineLyricResult{Lyric: plainText, LXLyric: lx}
 }
 
 // ---------------------------------------------------------------------------

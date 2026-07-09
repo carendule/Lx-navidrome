@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -80,8 +81,9 @@ type onlineSourceReorderRequest struct {
 }
 
 type onlineSourceSettings struct {
-	DownloadPath string   `json:"downloadPath"`
-	NameTemplate []string `json:"nameTemplate,omitempty"`
+	DownloadPath  string   `json:"downloadPath"`
+	NameTemplate  []string `json:"nameTemplate,omitempty"`
+	LyricaBaseURL string   `json:"lyricaBaseURL,omitempty"`
 	// EmbedMode controls what the downloader writes into the
 	// audio file's native tag container after a successful
 	// download. The three legal values are:
@@ -101,6 +103,26 @@ type onlineSourceSettings struct {
 	// explicitly so users can opt out without losing the
 	// choice on the next save.
 	EmbedMode string `json:"embedMode"`
+}
+
+const defaultOnlineLyricaBaseURL = "https://wilooper-lyrica.hf.space"
+
+func sanitizeLyricaBaseURL(raw string) string {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return defaultOnlineLyricaBaseURL
+	}
+	if !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
+		v = "https://" + v
+	}
+	u, err := url.Parse(v)
+	if err != nil || u.Host == "" {
+		return defaultOnlineLyricaBaseURL
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return defaultOnlineLyricaBaseURL
+	}
+	return strings.TrimRight(u.String(), "/")
 }
 
 // embedModeNone / embedModeMetadata / embedModeAll are the legal
@@ -287,15 +309,29 @@ func (api *Router) saveOnlineSourceSettings(w http.ResponseWriter, r *http.Reque
 	// button can't clobber an unrelated setting. A fresh install
 	// falls through to the default via loadOnlineSourceSettings.
 	requestMode := strings.TrimSpace(req.EmbedMode)
+	requestLyricaBaseURL := strings.TrimSpace(req.LyricaBaseURL)
 	if requestMode == "" {
 		existing, err := loadOnlineSourceSettings()
 		if err != nil {
 			settings.EmbedMode = defaultOnlineEmbedMode
+			settings.LyricaBaseURL = defaultOnlineLyricaBaseURL
 		} else {
 			settings.EmbedMode = existing.EmbedMode
+			settings.LyricaBaseURL = existing.LyricaBaseURL
 		}
 	} else {
+		existing, err := loadOnlineSourceSettings()
+		if err != nil {
+			settings.LyricaBaseURL = defaultOnlineLyricaBaseURL
+		} else {
+			settings.LyricaBaseURL = existing.LyricaBaseURL
+		}
 		settings.EmbedMode = sanitizeEmbedMode(requestMode)
+	}
+	if requestLyricaBaseURL != "" {
+		settings.LyricaBaseURL = sanitizeLyricaBaseURL(requestLyricaBaseURL)
+	} else {
+		settings.LyricaBaseURL = sanitizeLyricaBaseURL(settings.LyricaBaseURL)
 	}
 
 	if err := saveOnlineSourceSettings(settings); err != nil {
@@ -656,9 +692,10 @@ func loadOnlineSourceSettings() (onlineSourceSettings, error) {
 	// "" / nil) and overrides any default the struct literal set.
 	defaultsForOnlineSourceSettings := func() onlineSourceSettings {
 		return onlineSourceSettings{
-			DownloadPath: defaultOnlineDownloadPath(),
-			NameTemplate: append([]string{}, defaultOnlineNameTemplate...),
-			EmbedMode:    defaultOnlineEmbedMode,
+			DownloadPath:  defaultOnlineDownloadPath(),
+			NameTemplate:  append([]string{}, defaultOnlineNameTemplate...),
+			LyricaBaseURL: defaultOnlineLyricaBaseURL,
+			EmbedMode:     defaultOnlineEmbedMode,
 		}
 	}
 
@@ -721,9 +758,10 @@ func loadOnlineSourceSettings() (onlineSourceSettings, error) {
 	// failure here doesn't block the load.
 	if !rawOnDiskHasEmbedMode {
 		upgraded := onlineSourceSettings{
-			DownloadPath: settings.DownloadPath,
-			NameTemplate: settings.NameTemplate,
-			EmbedMode:    settings.EmbedMode,
+			DownloadPath:  settings.DownloadPath,
+			NameTemplate:  settings.NameTemplate,
+			LyricaBaseURL: settings.LyricaBaseURL,
+			EmbedMode:     settings.EmbedMode,
 		}
 		if buf, mErr := json.MarshalIndent(upgraded, "", "  "); mErr == nil {
 			_ = os.WriteFile(onlineSettingsPath(), buf, 0o600)
@@ -735,6 +773,7 @@ func loadOnlineSourceSettings() (onlineSourceSettings, error) {
 		settings.DownloadPath = defaultOnlineDownloadPath()
 	}
 	settings.NameTemplate = sanitizeOnlineNameTemplate(settings.NameTemplate)
+	settings.LyricaBaseURL = sanitizeLyricaBaseURL(settings.LyricaBaseURL)
 	return settings, nil
 }
 
@@ -746,6 +785,7 @@ func saveOnlineSourceSettings(settings onlineSourceSettings) error {
 	if settings.DownloadPath == "" {
 		settings.DownloadPath = defaultOnlineDownloadPath()
 	}
+	settings.LyricaBaseURL = sanitizeLyricaBaseURL(settings.LyricaBaseURL)
 	b, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err

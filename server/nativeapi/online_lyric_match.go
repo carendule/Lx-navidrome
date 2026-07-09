@@ -1,27 +1,14 @@
 package nativeapi
 
-// online_lyric_match.go — multi-source lyric matching.
+// online_lyric_match.go — lyric candidate matching helpers.
 //
-// Problem: a single source (wy / kg / kw / tx / mg) frequently
-// returns no usable lyrics for a given song, even when other
-// sources have them. The original orchestrator (see
-// fetchOnlineEmbedLyric) only tried one Go source (the one the
-// song was resolved from) and one user-supplied script. If both
-// failed, the user got a tagged file with no lyrics.
-//
-// Solution: try every source in priority order, and only accept
-// a lyric whose embedded [ti:]/[ar:] tags (and total runtime)
-// match the song we downloaded. This file implements the
-// matcher (used to score each candidate) and the fallback
-// orchestrator (which iterates the sources and picks the first
-// acceptable one).
-//
-// The matcher's job is small but easy to get wrong, so it's
-// kept in its own file: a unit test can exercise the score
-// function without spinning up any network or ffmpeg.
+// This file contains the score rules used to decide whether a
+// lyric candidate matches the song being downloaded. The current
+// embed flow tries candidates from script / meta.lrcUrl / Lyrica,
+// and every candidate passes through these match rules before it
+// can be embedded.
 
 import (
-	"context"
 	"regexp"
 	"strconv"
 	"strings"
@@ -37,6 +24,7 @@ import (
 // apply.
 type onlineLyricCandidate struct {
 	Source      string // "wy" / "kg" / "kw" / "tx" / "mg" / "script:<id>"
+	Kind        string // lyric / tlyric / rlyric / lxlyric
 	Lyric       string
 	SelfTitle   string // [ti:...]
 	SelfArtist  string // [ar:...]
@@ -421,247 +409,78 @@ func onlineLyricMatchApplyRules(out onlineLyricMatchScore) onlineLyricMatchScore
 	return out
 }
 
-// onlineLyricMatchAttempt is the trace-friendly per-attempt
-// summary the orchestrator accumulates. The summary is
-// emitted as a single [EMBED] lyric:fallback-result line at
-// the end of the fallback run, listing every source the
-// orchestrator tried, which ones returned non-empty lyrics,
-// and which (if any) the matcher accepted.
-type onlineLyricMatchAttempt struct {
-	Source   string
-	HadLyric bool
-	Accepted bool
-	Reason   string
-	// TitleScore / ArtistScore / DurationDelta are echoed
-	// from the score struct so the user can spot a
-	// borderline case (e.g. score=72 when the threshold is
-	// 70) without reading the per-source traces.
-	TitleScore    int
-	ArtistScore   int
-	DurationDelta int
-}
-
-// onlineLyricFallbackOrder is the canonical priority list
-// for multi-source fallback. wy is first because it has
-// the largest Chinese-population catalog and the most
-// accurate per-line timing; mg is last among the public
-// sources because mrcUrl (their encrypted MRC variant) is
-// often empty and the fallback to plain lrcUrl misses
-// ~30% of paid songs. The user-supplied script is
-// consulted *after* the public sources in this fallback
-// because the script is usually a thin lx-music wrapper
-// that doesn't carry its own lyric backend; in cases
-// where the script *does* carry one (e.g. ikun with
-// proxy), the user can still see it in the trace and
-// configure embedModeAll to prefer it.
-//
-// The order is a slice rather than a map so the trace can
-// report "tried sources in this order".
-var onlineLyricFallbackOrder = []string{"wy", "kg", "kw", "tx", "mg"}
-
-// onlineLyricFallback runs the Go client against every
-// source in onlineLyricFallbackOrder plus (when the
-// candidate script differs from the canonical sources)
-// the user-supplied script, and returns the first
-// candidate that onlineLyricMatchScoreLyric accepts.
-//
-// On no match, returns the first non-empty lyric we found
-// anyway (the user has explicitly asked us to "best-effort"
-// embed rather than leave the file with no lyric at all),
-// or "" if every source returned nothing. The
-// best-effort-without-match fallback is also gated: we
-// only accept a tag-less lyric when no tagged candidate
-// existed in the entire fallback run, so we don't
-// silently take a wrong song's lyrics over a correct
-// match from a later source.
-func onlineLyricFallback(ctx context.Context, songInfo map[string]any) (string, []onlineLyricMatchAttempt) {
-	attempts := make([]onlineLyricMatchAttempt, 0, len(onlineLyricFallbackOrder)+1)
-	// FirstNonEmptyWithoutTags is the lyric we'll fall back
-	// to if NOTHING in the run passed the matcher. We only
-	// take this path when every source returned empty or
-	// every non-empty candidate was mismatched AND no
-	// accepted candidate existed; otherwise the user's
-	// tolerance for "wrong song" is set by the matcher
-	// thresholds, not by us.
-	firstNonEmptyWithoutTags := ""
-	firstNonEmptyWithoutTagsSrc := ""
-	for _, source := range onlineLyricFallbackOrder {
-		cand, err := onlineLyricCandidateFromSource(ctx, source, songInfo)
-		if err != nil {
-			// Per-source fetchers don't return errors
-			// (the embed pipeline is best-effort), but
-			// future refactors might. Treat an error
-			// the same as "empty result" and continue.
-			attempts = append(attempts, onlineLyricMatchAttempt{Source: source, HadLyric: false, Reason: "fetch-error"})
+func onlineLyricCandidatesFromResult(source string, res onlineLyricResult) []onlineLyricCandidate {
+	fields := []struct {
+		kind string
+		text string
+	}{
+		{kind: "lyric", text: res.Lyric},
+		{kind: "tlyric", text: res.TLyric},
+		{kind: "rlyric", text: res.RLyric},
+		{kind: "lxlyric", text: res.LXLyric},
+	}
+	out := make([]onlineLyricCandidate, 0, len(fields))
+	for _, f := range fields {
+		text := strings.TrimSpace(f.text)
+		if text == "" {
 			continue
 		}
-		if cand.Lyric == "" {
-			attempts = append(attempts, onlineLyricMatchAttempt{Source: source, HadLyric: false, Reason: "empty"})
-			continue
+		c := onlineLyricCandidate{
+			Source: source,
+			Kind:   f.kind,
+			Lyric:  text,
 		}
-		score := onlineLyricMatchScoreLyric(songInfo, cand)
-		att := onlineLyricMatchAttempt{
-			Source:        source,
-			HadLyric:      true,
-			Accepted:      score.OK,
-			Reason:        score.Reason,
-			TitleScore:    score.TitleScore,
-			ArtistScore:   score.ArtistScore,
-			DurationDelta: score.DurationDelta,
-		}
-		attempts = append(attempts, att)
-		// Per-attempt trace so the user can see the
-		// exact scores the matcher computed. Without
-		// this line, a "title tag did not match"
-		// reason was opaque — the user couldn't tell
-		// whether to relax the threshold or fix the
-		// source. With the three numbers printed the
-		// decision is obvious from the log alone.
-		embedTrace(ctx, "lyric:fallback-attempt",
-			"source", source,
-			"hadLyric", true,
-			"accepted", score.OK,
-			"reason", score.Reason,
-			"titleScore", score.TitleScore,
-			"artistScore", score.ArtistScore,
-			"durationDelta", score.DurationDelta,
-			"selfTitle", cand.SelfTitle,
-			"selfArtist", cand.SelfArtist,
-		)
-		if score.OK {
-			return cand.Lyric, attempts
-		}
-		// Track the first non-empty tag-less candidate as
-		// a last-resort fallback. We only set this if the
-		// candidate has zero identifying signals at all
-		// (so the matcher's "no evidence" branch fired);
-		// if the candidate HAD tags but was rejected for
-		// being a wrong song, we don't take it.
-		if firstNonEmptyWithoutTags == "" && score.TitleScore < 0 && score.ArtistScore < 0 && cand.LyricDurSec == 0 {
-			firstNonEmptyWithoutTags = cand.Lyric
-			firstNonEmptyWithoutTagsSrc = source
-		}
+		c.SelfTitle, c.SelfArtist, c.SelfAlbum = onlineLyricParseIDTags(text)
+		c.LyricDurSec = onlineLyricMaxTimeTagSeconds(text)
+		out = append(out, c)
 	}
-
-	// Cross-source search phase. The songmid-based
-	// fallback above only works when the songInfo's
-	// songmid happens to be valid in the target
-	// source's namespace — which is true when the
-	// download source matches the lyric source, but
-	// not in general. A WY download's songmid is a WY
-	// id; when we feed that to KW, KW treats it as a
-	// KW id and returns a wrong song's lyric (or
-	// empty). The fix: if the songmid-based phase
-	// produced no accepted candidate, do a name+singer
-	// search on wy/tx/kw to find the song's id in
-	// that source's own namespace, then re-fetch.
-	//
-	// This phase is gated: it only runs when no
-	// source returned a non-empty lyric. The user's
-	// case (WY download → KW returns wrong song with
-	// a real lyric) is handled by the existing
-	// matcher veto (artist score = 0 → reject), so
-	// the matcher always wins when the wrong-song
-	// data is in hand. The search phase is purely
-	// additive — it gives us a second chance to find
-	// the right song when the songmid-based phase
-	// returned empty.
-	searchOrder := []string{"wy", "tx", "kw"}
-	for _, source := range searchOrder {
-		searchCtx, cancel := context.WithTimeout(ctx, onlineLyricSearchTimeout)
-		res := onlineLyricSearchDispatch(searchCtx, source, songInfo)
-		cancel()
-		if res.Lyric == "" {
-			attempts = append(attempts, onlineLyricMatchAttempt{
-				Source:   source + ":search",
-				HadLyric: res.Searched,
-				Reason:   "search-no-match",
-			})
-			continue
-		}
-		// We have a search-accepted lyric. Re-score
-		// it through the matcher (the search-side
-		// pre-accept is a fast pre-check; the full
-		// matcher run is the final gate so the trace
-		// numbers are consistent with the songmid
-		// phase). The candidate's [ti:]/[ar:] are
-		// extracted by the existing parser, so the
-		// score logic is identical to the songmid
-		// phase.
-		cand := onlineLyricCandidate{
-			Source:      source + ":search",
-			Lyric:       res.Lyric,
-			SelfTitle:   res.FirstCandidateTitle,
-			SelfArtist:  res.FirstCandidateSinger,
-			LyricDurSec: onlineLyricMaxTimeTagSeconds(res.Lyric),
-		}
-		score := onlineLyricMatchScoreLyric(songInfo, cand)
-		att := onlineLyricMatchAttempt{
-			Source:        cand.Source,
-			HadLyric:      true,
-			Accepted:      score.OK,
-			Reason:        score.Reason,
-			TitleScore:    score.TitleScore,
-			ArtistScore:   score.ArtistScore,
-			DurationDelta: score.DurationDelta,
-		}
-		attempts = append(attempts, att)
-		embedTrace(ctx, "lyric:fallback-attempt",
-			"source", cand.Source,
-			"hadLyric", true,
-			"accepted", score.OK,
-			"reason", score.Reason,
-			"titleScore", score.TitleScore,
-			"artistScore", score.ArtistScore,
-			"durationDelta", score.DurationDelta,
-			"selfTitle", cand.SelfTitle,
-			"selfArtist", cand.SelfArtist,
-		)
-		if score.OK {
-			return cand.Lyric, attempts
-		}
-	}
-
-	if firstNonEmptyWithoutTags != "" {
-		embedTrace(ctx, "lyric:fallback-best-effort", "source", firstNonEmptyWithoutTagsSrc, "reason", "no tagged candidate matched, accepting tag-less first result")
-		return firstNonEmptyWithoutTags, attempts
-	}
-	return "", attempts
+	return out
 }
 
-// onlineLyricSearchDispatch routes to the per-source
-// search-and-fetch function. Returns a zero result
-// (Lyric="", Searched=false) when the source doesn't
-// have a search implementation; the orchestrator skips
-// the attempt trace for that case.
-func onlineLyricSearchDispatch(ctx context.Context, source string, songInfo map[string]any) onlineLyricSearchResult {
-	switch source {
-	case "wy":
-		return fetchOnlineLyricWYBySearch(ctx, songInfo)
-	case "tx":
-		return fetchOnlineLyricTXBySearch(ctx, songInfo)
-	case "kw":
-		return fetchOnlineLyricKWBySearch(ctx, songInfo)
-	}
-	return onlineLyricSearchResult{}
+func onlineLyricResultHasAny(res onlineLyricResult) bool {
+	return strings.TrimSpace(res.Lyric) != "" ||
+		strings.TrimSpace(res.TLyric) != "" ||
+		strings.TrimSpace(res.RLyric) != "" ||
+		strings.TrimSpace(res.LXLyric) != ""
 }
 
-// onlineLyricCandidateFromSource runs the per-source Go
-// fetcher and packs the result into the candidate struct the
-// matcher expects. Kept as a thin wrapper so the orchestrator
-// doesn't have to know the per-source result shape.
-func onlineLyricCandidateFromSource(ctx context.Context, source string, songInfo map[string]any) (onlineLyricCandidate, error) {
-	res := fetchOnlineLyricBySource(ctx, source, songInfo)
-	if strings.TrimSpace(res.Lyric) == "" {
-		return onlineLyricCandidate{Source: source}, nil
+func onlineLyricAcceptedRank(c onlineLyricCandidate, score onlineLyricMatchScore) int {
+	if !score.OK {
+		return -1
 	}
-	c := onlineLyricCandidate{
-		Source: source,
-		Lyric:  res.Lyric,
+	// Rank by evidence quality (title/artist/duration), then
+	// prefer the canonical lyric field when scores are tied.
+	rank := 0
+	if score.TitleScore >= 0 {
+		rank += 200000 + score.TitleScore*1000
 	}
-	c.SelfTitle, c.SelfArtist, c.SelfAlbum = onlineLyricParseIDTags(res.Lyric)
-	c.LyricDurSec = onlineLyricMaxTimeTagSeconds(res.Lyric)
-	return c, nil
+	if score.ArtistScore >= 0 {
+		rank += 200000 + score.ArtistScore*1000
+	}
+	if score.DurationDelta >= 0 {
+		d := score.DurationDelta
+		if d > 100 {
+			d = 100
+		}
+		rank += 200000 + (100-d)*10
+	}
+	rank += onlineLyricKindPreference(c.Kind)
+	return rank
+}
+
+func onlineLyricKindPreference(kind string) int {
+	switch kind {
+	case "lyric":
+		return 40
+	case "tlyric":
+		return 30
+	case "rlyric":
+		return 20
+	case "lxlyric":
+		return 10
+	default:
+		return 0
+	}
 }
 
 // onlineLyricIDTagRxp matches the metadata tags that appear
