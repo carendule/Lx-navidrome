@@ -173,8 +173,9 @@ const useStyles = makeStyles((theme) => ({
         fontSize: '0.82rem',
         fontWeight: 600,
         [theme.breakpoints.down('sm')]: {
-            gridTemplateColumns: '42px minmax(170px, 2fr) minmax(110px, 1fr) 66px',
-            padding: theme.spacing(1, 1.2),
+            gridTemplateColumns: 'minmax(0, 1.7fr) minmax(0, 1fr) 52px',
+            gap: theme.spacing(0.75),
+            padding: theme.spacing(1, 1),
         },
     },
     resultRow: {
@@ -186,14 +187,18 @@ const useStyles = makeStyles((theme) => ({
         padding: theme.spacing(1.2, 2),
         borderBottom: `1px solid ${theme.palette.divider}`,
         [theme.breakpoints.down('sm')]: {
-            gridTemplateColumns: '42px minmax(170px, 2fr) minmax(110px, 1fr) 66px',
-            padding: theme.spacing(1, 1.2),
+            gridTemplateColumns: 'minmax(0, 1.7fr) minmax(0, 1fr) 52px',
+            gap: theme.spacing(0.75),
+            padding: theme.spacing(1, 1),
         },
     },
     colIdx: {
         textAlign: 'center',
         color: theme.palette.text.secondary,
         fontVariantNumeric: 'tabular-nums',
+        [theme.breakpoints.down('sm')]: {
+            display: 'none',
+        },
     },
     songCell: {
         display: 'flex',
@@ -254,6 +259,14 @@ const useStyles = makeStyles((theme) => ({
         textAlign: 'left',
         fontVariantNumeric: 'tabular-nums',
         color: theme.palette.text.secondary,
+    },
+    artistCell: {
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        [theme.breakpoints.down('sm')]: {
+            fontSize: '0.82rem',
+        },
     },
     headerCenterCell: {
         display: 'block',
@@ -650,7 +663,7 @@ const OnlineSongSearch = ({
                         <div className={classes.tableHeader}>
                             <span className={classes.colIdx}>#</span>
                             <span>{translate('online.songTable.title', { _: 'Title' })}</span>
-                            <span className={classes.mobileHidden}>{translate('online.songTable.artist', { _: 'Artist' })}</span>
+                            <span className={classes.artistCell}>{translate('online.songTable.artist', { _: 'Artist' })}</span>
                             <span className={classes.mobileHidden}>{translate('online.songTable.album', { _: 'Album' })}</span>
                             <span className={classes.mobileHidden}>{translate('online.songTable.duration', { _: 'Duration' })}</span>
                             <span className={classes.headerCenterCell}>{translate('online.songTable.action', { _: 'Action' })}</span>
@@ -733,7 +746,7 @@ const OnlineSongSearch = ({
                                             </div>
 
                                             <Typography
-                                                className={`${classes.textCell} ${classes.mobileHidden}`}
+                                                className={classes.artistCell}
                                                 title={item.singer || ''}
                                             >
                                                 {item.singer || '--'}
