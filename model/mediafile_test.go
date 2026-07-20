@@ -268,6 +268,35 @@ var _ = Describe("MediaFiles", func() {
 					})
 				})
 			})
+			Context("ReplayGain", func() {
+				It("picks the most frequent non-nil album gain and peak", func() {
+					mfs := MediaFiles{
+						{Path: "a", RGAlbumGain: new(-8.0), RGAlbumPeak: new(0.9)},
+						{Path: "b", RGAlbumGain: new(-8.0), RGAlbumPeak: new(0.9)},
+						{Path: "c", RGAlbumGain: new(-5.0), RGAlbumPeak: new(1.0)},
+					}
+					album := mfs.ToAlbum()
+					Expect(album.RGAlbumGain).ToNot(BeNil())
+					Expect(*album.RGAlbumGain).To(Equal(-8.0))
+					Expect(album.RGAlbumPeak).ToNot(BeNil())
+					Expect(*album.RGAlbumPeak).To(Equal(0.9))
+				})
+				It("keeps a genuine 0.0 gain instead of dropping it", func() {
+					mfs := MediaFiles{
+						{Path: "a", RGAlbumGain: new(0.0)},
+						{Path: "b", RGAlbumGain: new(0.0)},
+					}
+					album := mfs.ToAlbum()
+					Expect(album.RGAlbumGain).ToNot(BeNil())
+					Expect(*album.RGAlbumGain).To(Equal(0.0))
+				})
+				It("leaves gain and peak nil when no track has a value", func() {
+					mfs := MediaFiles{{Path: "a"}, {Path: "b"}}
+					album := mfs.ToAlbum()
+					Expect(album.RGAlbumGain).To(BeNil())
+					Expect(album.RGAlbumPeak).To(BeNil())
+				})
+			})
 			Context("Participants", func() {
 				var album Album
 				BeforeEach(func() {
@@ -603,6 +632,15 @@ var _ = Describe("MediaFile", func() {
 	})
 
 })
+
+var _ = DescribeTable("MediaFile.HasEmbeddedLyrics",
+	func(lyrics string, expected bool) {
+		Expect(MediaFile{Lyrics: lyrics}.HasEmbeddedLyrics()).To(Equal(expected))
+	},
+	Entry("empty string (never-scanned zero value)", "", false),
+	Entry(`the post-scan "[]" no-lyrics sentinel`, "[]", false),
+	Entry("a stored lyric list", `[{"lang":"eng","line":[{"value":"la"}]}]`, true),
+)
 
 var _ = Describe("MediaFile.Works", func() {
 	It("returns nil when there are no work tags", func() {

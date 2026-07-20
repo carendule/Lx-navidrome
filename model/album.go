@@ -49,6 +49,8 @@ type Album struct {
 	MbzReleaseGroupID    string   `structs:"mbz_release_group_id" json:"mbzReleaseGroupId,omitempty"`
 	FolderIDs            []string `structs:"folder_ids" json:"-" hash:"set"` // All folders that contain media_files for this album
 	ExplicitStatus       string   `structs:"explicit_status" json:"explicitStatus"`
+	RGAlbumGain          *float64 `structs:"rg_album_gain" json:"rgAlbumGain"`
+	RGAlbumPeak          *float64 `structs:"rg_album_peak" json:"rgAlbumPeak"`
 
 	// External metadata fields
 	Description           string     `structs:"description" json:"description,omitempty" hash:"ignore"`
@@ -141,6 +143,8 @@ type AlbumRepository interface {
 	UpdateExternalInfo(*Album) error
 	Get(id string) (*Album, error)
 	GetAll(...QueryOptions) (Albums, error)
+	GetCursor(...QueryOptions) (AlbumCursor, error)
+	GetYears(libraryIDs ...int) ([]int, error)
 
 	// The following methods are used exclusively by the scanner:
 	Touch(ids ...string) error
