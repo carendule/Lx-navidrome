@@ -84,6 +84,7 @@ type onlineSourceSettings struct {
 	DownloadPath  string   `json:"downloadPath"`
 	NameTemplate  []string `json:"nameTemplate,omitempty"`
 	LyricaBaseURL string   `json:"lyricaBaseURL,omitempty"`
+	MCPToken      string   `json:"mcpToken,omitempty"`
 	// EmbedMode controls what the downloader writes into the
 	// audio file's native tag container after a successful
 	// download. The three legal values are:
@@ -282,10 +283,22 @@ func (api *Router) getOnlineSourceSettings(w http.ResponseWriter, r *http.Reques
 }
 
 func (api *Router) saveOnlineSourceSettings(w http.ResponseWriter, r *http.Request) {
-	var req onlineSourceSettings
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
+	}
+
+	var req onlineSourceSettings
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	var reqFields map[string]json.RawMessage
+	_ = json.Unmarshal(body, &reqFields)
+	hasMCPToken := false
+	if reqFields != nil {
+		_, hasMCPToken = reqFields["mcpToken"]
 	}
 
 	onlineSourceMu.Lock()
@@ -294,9 +307,15 @@ func (api *Router) saveOnlineSourceSettings(w http.ResponseWriter, r *http.Reque
 	settings := onlineSourceSettings{
 		DownloadPath: strings.TrimSpace(req.DownloadPath),
 		NameTemplate: sanitizeOnlineNameTemplate(req.NameTemplate),
+		MCPToken:     strings.TrimSpace(req.MCPToken),
 	}
 	if settings.DownloadPath == "" {
 		settings.DownloadPath = defaultOnlineDownloadPath()
+	}
+
+	existing, existingErr := loadOnlineSourceSettings()
+	if existingErr == nil && !hasMCPToken {
+		settings.MCPToken = existing.MCPToken
 	}
 
 	// EmbedMode has its own UI on the settings panel now, so we
@@ -311,8 +330,7 @@ func (api *Router) saveOnlineSourceSettings(w http.ResponseWriter, r *http.Reque
 	requestMode := strings.TrimSpace(req.EmbedMode)
 	requestLyricaBaseURL := strings.TrimSpace(req.LyricaBaseURL)
 	if requestMode == "" {
-		existing, err := loadOnlineSourceSettings()
-		if err != nil {
+		if existingErr != nil {
 			settings.EmbedMode = defaultOnlineEmbedMode
 			settings.LyricaBaseURL = defaultOnlineLyricaBaseURL
 		} else {
@@ -320,8 +338,7 @@ func (api *Router) saveOnlineSourceSettings(w http.ResponseWriter, r *http.Reque
 			settings.LyricaBaseURL = existing.LyricaBaseURL
 		}
 	} else {
-		existing, err := loadOnlineSourceSettings()
-		if err != nil {
+		if existingErr != nil {
 			settings.LyricaBaseURL = defaultOnlineLyricaBaseURL
 		} else {
 			settings.LyricaBaseURL = existing.LyricaBaseURL
@@ -695,6 +712,7 @@ func loadOnlineSourceSettings() (onlineSourceSettings, error) {
 			DownloadPath:  defaultOnlineDownloadPath(),
 			NameTemplate:  append([]string{}, defaultOnlineNameTemplate...),
 			LyricaBaseURL: defaultOnlineLyricaBaseURL,
+			MCPToken:      "",
 			EmbedMode:     defaultOnlineEmbedMode,
 		}
 	}
@@ -772,6 +790,7 @@ func loadOnlineSourceSettings() (onlineSourceSettings, error) {
 	if settings.DownloadPath == "" {
 		settings.DownloadPath = defaultOnlineDownloadPath()
 	}
+	settings.MCPToken = strings.TrimSpace(settings.MCPToken)
 	settings.NameTemplate = sanitizeOnlineNameTemplate(settings.NameTemplate)
 	settings.LyricaBaseURL = sanitizeLyricaBaseURL(settings.LyricaBaseURL)
 	return settings, nil
@@ -785,6 +804,7 @@ func saveOnlineSourceSettings(settings onlineSourceSettings) error {
 	if settings.DownloadPath == "" {
 		settings.DownloadPath = defaultOnlineDownloadPath()
 	}
+	settings.MCPToken = strings.TrimSpace(settings.MCPToken)
 	settings.LyricaBaseURL = sanitizeLyricaBaseURL(settings.LyricaBaseURL)
 	b, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {

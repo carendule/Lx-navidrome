@@ -61,6 +61,7 @@ func (api *Router) routes() http.Handler {
 	// Public
 	api.RX(r, "/translation", newTranslationRepository, false)
 	api.addOnlineSearchRoutes(r)
+	api.addMCPRoute(r)
 
 	// Protected
 	r.Group(func(r chi.Router) {

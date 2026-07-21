@@ -7,6 +7,10 @@ import {
   CardContent,
   Chip,
   Divider,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   FormControlLabel,
   IconButton,
   Radio,
@@ -20,9 +24,11 @@ import {
   MdDeleteOutline,
   MdDragIndicator,
   MdFolder,
+  MdHelpOutline,
   MdLibraryMusic,
   MdSettings,
   MdTextFields,
+  MdVpnKey,
 } from 'react-icons/md'
 import { httpClient } from '../dataProvider'
 import {
@@ -309,6 +315,29 @@ const useStyles = makeStyles((theme) => ({
     color: theme.palette.text.disabled,
     marginTop: theme.spacing(0.5),
   },
+  mcpHeaderRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing(1),
+  },
+  mcpHeaderLeft: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(1),
+  },
+  mcpHelpBtn: {
+    color: theme.palette.text.secondary,
+  },
+  mcpHint: {
+    color: theme.palette.text.secondary,
+    marginBottom: theme.spacing(1.5),
+  },
+  mcpWikiText: {
+    marginBottom: theme.spacing(1),
+    color: theme.palette.text.primary,
+    whiteSpace: 'pre-wrap',
+  },
 }))
 
 const tagColor = (theme, tag) => {
@@ -409,6 +438,9 @@ const OnlineSetting = () => {
     LYRICA_DEFAULT_BASE_URL,
   )
   const [savingLyricaBaseURL, setSavingLyricaBaseURL] = React.useState(false)
+  const [mcpToken, setMcpToken] = React.useState('')
+  const [savingMcpToken, setSavingMcpToken] = React.useState(false)
+  const [mcpWikiOpen, setMcpWikiOpen] = React.useState(false)
   // nameTemplate: chips the user has selected for the download
   // filename template (saved to settings). Defaults to [song title, artist].
   // The "available" row is derived as NAME_TEMPLATE_TOKENS minus
@@ -479,6 +511,11 @@ const OnlineSetting = () => {
           settingsJSON.lyricaBaseURL.trim()
           ? settingsJSON.lyricaBaseURL.trim()
           : LYRICA_DEFAULT_BASE_URL,
+      )
+      setMcpToken(
+        typeof settingsJSON?.mcpToken === 'string'
+          ? settingsJSON.mcpToken
+          : '',
       )
       setNameTemplate(template)
       setEmbedMode(mode)
@@ -681,6 +718,37 @@ const OnlineSetting = () => {
         setSavingLyricaBaseURL(false)
       })
   }, [lyricaBaseURL, notify, translate])
+
+  const handleSaveMcpToken = React.useCallback(() => {
+    setSavingMcpToken(true)
+    httpClient('/api/online/source/settings', {
+      method: 'POST',
+      body: JSON.stringify({ mcpToken }),
+      headers: new Headers({ 'Content-Type': 'application/json' }),
+    })
+      .then(({ json }) => {
+        const persisted =
+          typeof json?.mcpToken === 'string' ? json.mcpToken : ''
+        setMcpToken(persisted)
+        notify(
+          translate('online.mcpTokenSaved', {
+            _: 'MCP token saved',
+          }),
+          'info',
+        )
+      })
+      .catch(() => {
+        notify(
+          translate('online.mcpTokenSaveFailed', {
+            _: 'Failed to save MCP token',
+          }),
+          'warning',
+        )
+      })
+      .finally(() => {
+        setSavingMcpToken(false)
+      })
+  }, [mcpToken, notify, translate])
 
   // handleEmbedModeChange is the radio onChange callback for the
   // "Metadata embedding settings" section. The user-facing flow is:
@@ -1484,6 +1552,55 @@ const OnlineSetting = () => {
         </div>
       </div>
 
+      <div className={classes.settingsSection}>
+        <div className={classes.mcpHeaderRow}>
+          <div className={classes.mcpHeaderLeft}>
+            <MdVpnKey className={classes.titleIcon} size={20} />
+            <Typography variant="h6">
+              {translate('online.mcpTokenTitle', {
+                _: 'MCP Token Settings',
+              })}
+            </Typography>
+          </div>
+          <IconButton
+            size="small"
+            className={classes.mcpHelpBtn}
+            onClick={() => setMcpWikiOpen(true)}
+            aria-label={translate('online.mcpHelp', { _: 'MCP help' })}
+            title={translate('online.mcpHelp', { _: 'MCP help' })}
+          >
+            <MdHelpOutline size={18} />
+          </IconButton>
+        </div>
+        <Typography variant="body2" className={classes.mcpHint}>
+          {translate('online.mcpTokenHint', {
+            _: 'Configure a token for external MCP clients such as Moviepilot. The client can use it as Authorization: Bearer <token> or X-ND-MCP-Token.',
+          })}
+        </Typography>
+        <TextField
+          className={classes.settingsField}
+          variant="outlined"
+          size="small"
+          label={translate('online.mcpTokenLabel', { _: 'MCP Token' })}
+          value={mcpToken}
+          onChange={(event) => setMcpToken(event.target.value)}
+          placeholder={translate('online.mcpTokenPlaceholder', {
+            _: 'Enter a custom MCP token',
+          })}
+        />
+        <div className={classes.saveButtonWrap}>
+          <Button
+            variant="contained"
+            color="primary"
+            className={classes.manageButton}
+            onClick={handleSaveMcpToken}
+            disabled={savingMcpToken}
+          >
+            {translate('online.saveMcpToken', { _: 'Save' })}
+          </Button>
+        </div>
+      </div>
+
       {templateFloating.clip && (
         <div
           className={classes.templateChipFloating}
@@ -1495,6 +1612,46 @@ const OnlineSetting = () => {
           </span>
         </div>
       )}
+
+      <Dialog
+        open={mcpWikiOpen}
+        onClose={() => setMcpWikiOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          {translate('online.mcpWikiTitle', {
+            _: 'MCP Usage Guide',
+          })}
+        </DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" className={classes.mcpWikiText}>
+            {translate('online.mcpWikiIntro', {
+              _: 'Endpoint: /api/mcp (HTTP POST, JSON-RPC 2.0).',
+            })}
+          </Typography>
+          <Typography variant="body2" className={classes.mcpWikiText}>
+            {translate('online.mcpWikiAuth', {
+              _: 'Authentication: use the token above via Authorization: Bearer <token> or X-ND-MCP-Token header.',
+            })}
+          </Typography>
+          <Typography variant="body2" className={classes.mcpWikiText}>
+            {translate('online.mcpWikiFlow', {
+              _: 'Basic flow: initialize -> tools/list -> tools/call(searchSongs) -> tools/call(startDownload) -> tools/call(getDownloadStatus or waitDownload).',
+            })}
+          </Typography>
+          <Typography variant="body2" className={classes.mcpWikiText}>
+            {translate('online.mcpWikiTools', {
+              _: 'Tools: ping, searchSongs, startDownload, getDownloadStatus, waitDownload.',
+            })}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMcpWikiOpen(false)} color="primary">
+            {translate('online.close', { _: 'Close' })}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <div className={classes.pageTitle}>
         <MdSettings className={classes.titleIcon} size={20} />

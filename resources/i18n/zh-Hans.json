@@ -661,6 +661,20 @@
     "saveLyricaBaseURL": "保存",
     "lyricaBaseURLSaved": "Lyrica 地址已保存",
     "lyricaBaseURLSaveFailed": "保存 Lyrica 地址失败",
+    "mcpTokenTitle": "MCP Token 设置",
+    "mcpHelp": "MCP 帮助",
+    "mcpTokenHint": "为 Moviepilot 等外部 MCP 客户端配置访问令牌。客户端可使用 Authorization: Bearer <token> 或 X-ND-MCP-Token 传递令牌。",
+    "mcpTokenLabel": "MCP Token",
+    "mcpTokenPlaceholder": "请输入自定义 MCP Token",
+    "saveMcpToken": "保存",
+    "mcpTokenSaved": "MCP Token 已保存",
+    "mcpTokenSaveFailed": "保存 MCP Token 失败",
+    "mcpWikiTitle": "MCP 使用说明",
+    "mcpWikiIntro": "接口地址：/api/mcp（HTTP POST，JSON-RPC 2.0）。",
+    "mcpWikiAuth": "认证方式：使用上方 Token，通过 Authorization: Bearer <token> 或 X-ND-MCP-Token 请求头传递。",
+    "mcpWikiFlow": "基础流程：initialize -> tools/list -> tools/call(searchSongs) -> tools/call(startDownload) -> tools/call(getDownloadStatus 或 waitDownload)。",
+    "mcpWikiTools": "可用工具：ping、searchSongs、startDownload、getDownloadStatus、waitDownload。",
+    "close": "关闭",
     "embedModeTitle": "元数据嵌入设置",
     "embedModeHint": "请选择下载文件是否嵌入元数据及歌词",
     "embedModeSaving": "保存中...",
@@ -815,7 +829,8 @@
       "download_network_interrupted": "下载网络中断",
       "import_failed": "入库失败",
       "add_to_playlist_failed": "入歌单失败",
-      "download_source_failed": "下载源失败"
+      "download_source_failed": "下载源失败",
+      "song_already_exists_in_library": "歌曲已存在于媒体库中"
     },
     "nameTemplate": {
       "tokens": {
