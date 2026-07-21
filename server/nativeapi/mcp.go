@@ -30,6 +30,8 @@ const (
 	mcpCandidateTTL    = 30 * time.Minute
 	mcpFlowSessionTTL  = 30 * time.Minute
 	mcpMaxWaitTimeout  = 120
+	mcpSearchCacheTTL  = 20 * time.Second
+	mcpSearchTimeout   = 12 * time.Second
 )
 
 type mcpJSONRPCRequest struct {
@@ -94,6 +96,26 @@ type mcpFlowSession struct {
 var mcpCandidates sync.Map
 var mcpFlowSessions sync.Map
 var mcpTranslationCache sync.Map
+
+type mcpSearchCacheEntry struct {
+	Result    map[string]any
+	ExpiresAt time.Time
+}
+
+type mcpSearchInflightCall struct {
+	Done   chan struct{}
+	Result map[string]any
+	Err    error
+}
+
+var mcpSearchState = struct {
+	sync.Mutex
+	Cache    map[string]mcpSearchCacheEntry
+	Inflight map[string]*mcpSearchInflightCall
+}{
+	Cache:    map[string]mcpSearchCacheEntry{},
+	Inflight: map[string]*mcpSearchInflightCall{},
+}
 
 func (api *Router) addMCPRoute(r chi.Router) {
 	r.Post("/mcp", api.handleMCP)
@@ -324,6 +346,7 @@ func (api *Router) handleMCPToolCall(r *http.Request, params mcpToolsCallParams)
 }
 
 func (api *Router) mcpSearchSongs(r *http.Request, args map[string]any) (any, *mcpRPCError) {
+	startedAt := time.Now()
 	keyword := strings.TrimSpace(asString(args["keyword"]))
 	if keyword == "" {
 		return nil, &mcpRPCError{Code: -32602, Message: "keyword is required"}
@@ -346,14 +369,101 @@ func (api *Router) mcpSearchSongs(r *http.Request, args map[string]any) (any, *m
 		limit = 50
 	}
 	includeRawSongInfo := asBool(args["includeRawSongInfo"], false)
+	requestKey := mcpSearchRequestKey(source, keyword, page, limit, includeRawSongInfo)
 
-	list, total, err := fetchOnlineSearchList(r.Context(), source, "song", keyword, page, limit, "")
+	result, fromCache, sharedInflight, err := api.mcpGetOrLoadSearchSongsResult(r, source, keyword, page, limit, includeRawSongInfo, requestKey)
 	if err != nil {
-		log.Warn(r.Context(), "MCP searchSongs failed", "source", source, "keyword", keyword, "err", err)
-		return mcpToolErrorResult("search failed", map[string]any{"error": err.Error()}), nil
+		elapsedMs := time.Since(startedAt).Milliseconds()
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return mcpToolErrorResult("search timeout", map[string]any{
+				"reason":       "search_timeout",
+				"error":        err.Error(),
+				"retryAfterMs": 1000,
+				"requestKey":   requestKey,
+				"elapsedMs":    elapsedMs,
+			}), nil
+		}
+		return mcpToolErrorResult("search failed", map[string]any{
+			"reason":     "search_failed",
+			"error":      err.Error(),
+			"requestKey": requestKey,
+			"elapsedMs":  elapsedMs,
+		}), nil
+	}
+	if fromCache || sharedInflight {
+		username, _ := request.UsernameFrom(r.Context())
+		mcpRefreshSearchResultSession(result, username)
 	}
 
-	username, _ := request.UsernameFrom(r.Context())
+	result["requestKey"] = requestKey
+	result["fromCache"] = fromCache
+	result["sharedInflight"] = sharedInflight
+	result["elapsedMs"] = time.Since(startedAt).Milliseconds()
+	candidateCount := mcpSearchCandidateCount(result["candidates"])
+	return mcpToolResult(fmt.Sprintf("found %d candidates", candidateCount), result), nil
+}
+
+func (api *Router) mcpGetOrLoadSearchSongsResult(r *http.Request, source, keyword string, page, limit int, includeRawSongInfo bool, requestKey string) (map[string]any, bool, bool, error) {
+	now := time.Now()
+	mcpSearchState.Lock()
+	for key, item := range mcpSearchState.Cache {
+		if now.After(item.ExpiresAt) {
+			delete(mcpSearchState.Cache, key)
+		}
+	}
+	if entry, ok := mcpSearchState.Cache[requestKey]; ok && now.Before(entry.ExpiresAt) {
+		cached := cloneStringMapAny(entry.Result)
+		mcpSearchState.Unlock()
+		return cached, true, false, nil
+	}
+	if inFlight, ok := mcpSearchState.Inflight[requestKey]; ok {
+		done := inFlight.Done
+		mcpSearchState.Unlock()
+		select {
+		case <-done:
+			if inFlight.Err != nil {
+				return nil, false, true, inFlight.Err
+			}
+			return cloneStringMapAny(inFlight.Result), false, true, nil
+		case <-r.Context().Done():
+			return nil, false, true, r.Context().Err()
+		}
+	}
+	call := &mcpSearchInflightCall{Done: make(chan struct{})}
+	mcpSearchState.Inflight[requestKey] = call
+	mcpSearchState.Unlock()
+
+	searchCtx, cancel := context.WithTimeout(r.Context(), mcpSearchTimeout)
+	defer cancel()
+	result, err := api.mcpBuildSearchSongsResult(searchCtx, source, keyword, page, limit, includeRawSongInfo)
+
+	mcpSearchState.Lock()
+	delete(mcpSearchState.Inflight, requestKey)
+	call.Result = cloneStringMapAny(result)
+	call.Err = err
+	if err == nil {
+		mcpSearchState.Cache[requestKey] = mcpSearchCacheEntry{
+			Result:    cloneStringMapAny(result),
+			ExpiresAt: time.Now().Add(mcpSearchCacheTTL),
+		}
+	}
+	close(call.Done)
+	mcpSearchState.Unlock()
+
+	if err != nil {
+		log.Warn(r.Context(), "MCP searchSongs failed", "source", source, "keyword", keyword, "requestKey", requestKey, "err", err)
+		return nil, false, false, err
+	}
+	return cloneStringMapAny(result), false, false, nil
+}
+
+func (api *Router) mcpBuildSearchSongsResult(ctx context.Context, source, keyword string, page, limit int, includeRawSongInfo bool) (map[string]any, error) {
+	list, total, err := fetchOnlineSearchList(ctx, source, "song", keyword, page, limit, "")
+	if err != nil {
+		return nil, err
+	}
+
+	username, _ := request.UsernameFrom(ctx)
 	candidates := make([]map[string]any, 0, len(list))
 	searchTokens := tokenizeSearchKeyword(keyword)
 	candidateIDs := make([]string, 0, len(list))
@@ -415,7 +525,7 @@ func (api *Router) mcpSearchSongs(r *http.Request, args map[string]any) (any, *m
 
 	flowSessionID := createMCPFlowSession(username, candidateIDs)
 
-	result := map[string]any{
+	return map[string]any{
 		"keyword":              keyword,
 		"source":               source,
 		"page":                 page,
@@ -430,8 +540,7 @@ func (api *Router) mcpSearchSongs(r *http.Request, args map[string]any) (any, *m
 			"requiresUserSelection": true,
 			"nextAction":            "Ask user to choose a candidate, then call confirmDownload",
 		},
-	}
-	return mcpToolResult(fmt.Sprintf("found %d candidates", len(candidates)), result), nil
+	}, nil
 }
 
 func (api *Router) mcpConfirmDownload(r *http.Request, args map[string]any) (any, *mcpRPCError) {
@@ -1116,6 +1225,105 @@ func tokenizeSearchKeyword(keyword string) []string {
 		tokens = append(tokens, p)
 	}
 	return tokens
+}
+
+func mcpSearchRequestKey(source, keyword string, page, limit int, includeRawSongInfo bool) string {
+	return strings.ToLower(strings.TrimSpace(source)) + "|" + strings.ToLower(strings.TrimSpace(keyword)) + "|" + strconv.Itoa(page) + "|" + strconv.Itoa(limit) + "|" + strconv.FormatBool(includeRawSongInfo)
+}
+
+func mcpSearchCandidateCount(raw any) int {
+	if items, ok := raw.([]map[string]any); ok {
+		return len(items)
+	}
+	if arr, ok := raw.([]any); ok {
+		return len(arr)
+	}
+	return 0
+}
+
+func cloneStringMapAny(src map[string]any) map[string]any {
+	if src == nil {
+		return nil
+	}
+	buf, err := json.Marshal(src)
+	if err != nil {
+		out := make(map[string]any, len(src))
+		for k, v := range src {
+			out[k] = v
+		}
+		return out
+	}
+	var dst map[string]any
+	if err := json.Unmarshal(buf, &dst); err != nil {
+		out := make(map[string]any, len(src))
+		for k, v := range src {
+			out[k] = v
+		}
+		return out
+	}
+	return dst
+}
+
+func mcpRefreshSearchResultSession(result map[string]any, username string) {
+	if result == nil {
+		return
+	}
+	rawCandidates, ok := result["candidates"].([]any)
+	if !ok || len(rawCandidates) == 0 {
+		return
+	}
+	newCandidateIDs := make([]string, 0, len(rawCandidates))
+	for _, raw := range rawCandidates {
+		candidate, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		songInfo := mcpCandidateSongInfoFromResult(candidate)
+		candidateID := saveMCPCandidate(username, songInfo)
+		candidate["candidateId"] = candidateID
+		newCandidateIDs = append(newCandidateIDs, candidateID)
+	}
+	if len(newCandidateIDs) == 0 {
+		return
+	}
+	flowSessionID := createMCPFlowSession(username, newCandidateIDs)
+	flow, _ := result["flow"].(map[string]any)
+	if flow == nil {
+		flow = map[string]any{}
+	}
+	flow["sessionId"] = flowSessionID
+	flow["state"] = mcpFlowStateWaitingUserSelection
+	flow["requiresUserSelection"] = true
+	flow["nextAction"] = "Ask user to choose a candidate, then call confirmDownload"
+	result["flow"] = flow
+}
+
+func mcpCandidateSongInfoFromResult(candidate map[string]any) map[string]any {
+	if candidate == nil {
+		return map[string]any{}
+	}
+	if raw, ok := candidate["songInfo"].(map[string]any); ok && len(raw) > 0 {
+		return cloneStringMap(raw)
+	}
+	name := strings.TrimSpace(asString(candidate["songName"]))
+	if name == "" {
+		name = strings.TrimSpace(asString(candidate["name"]))
+	}
+	singer := strings.TrimSpace(asString(candidate["artist"]))
+	if singer == "" {
+		singer = strings.TrimSpace(asString(candidate["singer"]))
+	}
+	source := strings.TrimSpace(asString(candidate["source"]))
+	return map[string]any{
+		"name":      name,
+		"songName":  name,
+		"singer":    singer,
+		"artist":    singer,
+		"albumName": asString(candidate["albumName"]),
+		"duration":  candidate["duration"],
+		"source":    source,
+		"qualitys":  candidate["qualitys"],
+	}
 }
 
 func computeKeywordRelevance(tokens []string, name, singer, album string) int {
