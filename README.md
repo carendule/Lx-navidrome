@@ -6,9 +6,9 @@
 
 [![基于 Navidrome](https://img.shields.io/badge/based%20on-Navidrome-4EACD5?style=flat-square&logo=github)](https://github.com/navidrome/navidrome)
 [![LX Music](https://img.shields.io/badge/integrated-LX%20Music-FF6B6B?style=flat-square)](https://github.com/lyswhut/lx-music-desktop)
-[![License](https://img.shields.io/github/license/your-username/lx-navidrome?style=flat-square)](LICENSE)
-[![Build](https://img.shields.io/github/actions/workflow/status/your-username/lx-navidrome/pipeline.yml?branch=master&logo=github&style=flat-square)](https://github.com/your-username/lx-navidrome/actions)
-[![Docker Pulls](https://img.shields.io/docker/pulls/your-dockerhub/lx-navidrome?logo=docker&label=pulls&style=flat-square)](https://hub.docker.com/r/your-dockerhub/lx-navidrome)
+[![License](https://img.shields.io/github/license/carendule/lx-navidrome?style=flat-square)](LICENSE)
+[![Build](https://img.shields.io/github/actions/workflow/status/carendule/lx-navidrome/pipeline.yml?branch=master&logo=github&style=flat-square)](https://github.com/carendule/lx-navidrome/actions)
+[![Docker Pulls](https://img.shields.io/docker/pulls/carendule/lx-navidrome?logo=docker&label=pulls&style=flat-square)](https://hub.docker.com/r/carendule/lx-navidrome)
 
 Lx-Navidrome 是一个基于 [Navidrome](https://github.com/navidrome/navidrome) 的增强版自托管音乐服务器，深度集成了 [LX Music（洛雪音乐）](https://github.com/lyswhut/lx-music-desktop) 的在线功能。你不仅可以管理和串流本地音乐库，还可以通过 LX Music 自定义音源直接在 Web 界面中搜索、同步来自多个主流音乐平台的在线曲目和歌单。
 
@@ -34,7 +34,7 @@ Lx-Navidrome 是一个基于 [Navidrome](https://github.com/navidrome/navidrome)
 - 🔉 按需**转码**，支持 Opus 编码，可按用户/播放器分别设置
 - 🌍 支持**多语言**界面(在线功能暂未完善除中文外其他语言)
 
-### 新增：LX Music 在线功能集成 🆕
+### 新增：LX Music 在线功能集成 🆕 *"在线功能请 点击用户头像-在线设置 配置"*
 - 🔍 **在线音乐搜索**：直接在 Navidrome Web 界面中搜索多平台在线曲目
 - 🔄 **在线歌单同步**：直接同步热门歌单或搜索的歌单到Navidrome,自动创建Navidrome歌单,同步任务自动匹配库内已有歌曲入歌单,未匹配到的直接调用lx下载
 - 📦 **自定义音源支持**：兼容 LX Music 生态的自定义 JS 音源脚本，一键导入
@@ -42,6 +42,9 @@ Lx-Navidrome 是一个基于 [Navidrome](https://github.com/navidrome/navidrome)
 - 📄 **元数据/歌词嵌入**：获取歌曲元数据,封面及歌词,可选嵌入歌曲
 - 🔗 **在线/本地统一界面**：本地库与在线音源在同一界面无缝切换
 
+### 新增：MCP功能 🆕
+- 🤖 **提供标准MCP**：包含ping|searchSongs|confirmDownload|startDownload|getDownloadStatus|waitDownload标准MCP方法,可集成在任意Agent中使用(已测试 [Moviepilot](https://github.com/jxxghp/MoviePilot)),支持HTTP post,json集成,API路径:/api/mcp
+Agent提示词模板请参考 [MCP_AGENT_PROMPT](https://github.com/carendule/Lx-navidrome/blob/develop/MCP_AGENT_PROMPT.md)
 ---
 
 ## 🚀 安装
