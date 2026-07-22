@@ -326,10 +326,11 @@ func mcpTools() []mcpTool {
 func (api *Router) handleMCPToolCall(r *http.Request, params mcpToolsCallParams) (any, *mcpRPCError) {
 	switch params.Name {
 	case "ping":
-		return mcpToolResult("pong", map[string]any{
+		structured := map[string]any{
 			"ok":         true,
 			"serverTime": time.Now().UTC().Format(time.RFC3339),
-		}), nil
+		}
+		return mcpToolResult(mcpPingResponseText(structured), structured), nil
 	case "searchSongs":
 		return api.mcpSearchSongs(r, params.Arguments)
 	case "confirmDownload":
@@ -375,20 +376,22 @@ func (api *Router) mcpSearchSongs(r *http.Request, args map[string]any) (any, *m
 	if err != nil {
 		elapsedMs := time.Since(startedAt).Milliseconds()
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return mcpToolErrorResult("search timeout", map[string]any{
+			structured := map[string]any{
 				"reason":       "search_timeout",
 				"error":        err.Error(),
 				"retryAfterMs": 1000,
 				"requestKey":   requestKey,
 				"elapsedMs":    elapsedMs,
-			}), nil
+			}
+			return mcpToolErrorResult(mcpSearchErrorText("search timeout", structured), structured), nil
 		}
-		return mcpToolErrorResult("search failed", map[string]any{
+		structured := map[string]any{
 			"reason":     "search_failed",
 			"error":      err.Error(),
 			"requestKey": requestKey,
 			"elapsedMs":  elapsedMs,
-		}), nil
+		}
+		return mcpToolErrorResult(mcpSearchErrorText("search failed", structured), structured), nil
 	}
 	if fromCache || sharedInflight {
 		username, _ := request.UsernameFrom(r.Context())
@@ -399,8 +402,7 @@ func (api *Router) mcpSearchSongs(r *http.Request, args map[string]any) (any, *m
 	result["fromCache"] = fromCache
 	result["sharedInflight"] = sharedInflight
 	result["elapsedMs"] = time.Since(startedAt).Milliseconds()
-	candidateCount := mcpSearchCandidateCount(result["candidates"])
-	return mcpToolResult(fmt.Sprintf("found %d candidates", candidateCount), result), nil
+	return mcpToolResult(mcpSearchResponseText(result), result), nil
 }
 
 func (api *Router) mcpGetOrLoadSearchSongsResult(r *http.Request, source, keyword string, page, limit int, includeRawSongInfo bool, requestKey string) (map[string]any, bool, bool, error) {
@@ -556,12 +558,14 @@ func (api *Router) mcpConfirmDownload(r *http.Request, args map[string]any) (any
 	username, _ := request.UsernameFrom(r.Context())
 	session, err := confirmMCPFlowCandidate(sessionID, candidateID, username)
 	if err != nil {
-		return mcpToolErrorResult("confirmation failed", map[string]any{"error": err.Error()}), nil
+		structured := map[string]any{"sessionId": sessionID, "candidateId": candidateID, "error": err.Error()}
+		return mcpToolErrorResult(mcpErrorText("confirmation failed", structured, "next: call searchSongs again, then confirmDownload with returned sessionId + candidateId"), structured), nil
 	}
 
 	songInfo, err := loadMCPCandidate(candidateID, username)
 	if err != nil {
-		return mcpToolErrorResult("candidate unavailable", map[string]any{"error": err.Error()}), nil
+		structured := map[string]any{"candidateId": candidateID, "error": err.Error()}
+		return mcpToolErrorResult(mcpErrorText("candidate unavailable", structured, "next: call searchSongs again and choose another candidate"), structured), nil
 	}
 	songName, singer := extractSongNameAndSinger(songInfo)
 
@@ -575,7 +579,7 @@ func (api *Router) mcpConfirmDownload(r *http.Request, args map[string]any) (any
 		"source":              asString(songInfo["source"]),
 		"nextAction":          "Call startDownload with confirmationToken",
 	}
-	return mcpToolResult("candidate confirmed", result), nil
+	return mcpToolResult(mcpConfirmResponseText(result), result), nil
 }
 
 func (api *Router) mcpStartDownload(r *http.Request, args map[string]any) (any, *mcpRPCError) {
@@ -587,18 +591,22 @@ func (api *Router) mcpStartDownload(r *http.Request, args map[string]any) (any, 
 
 	flowSession, err := loadMCPFlowSessionByToken(confirmationToken, username)
 	if err != nil {
-		return mcpToolErrorResult("invalid confirmation", map[string]any{"error": err.Error()}), nil
+		structured := map[string]any{"confirmationToken": confirmationToken, "error": err.Error()}
+		return mcpToolErrorResult(mcpErrorText("invalid confirmation", structured, "next: call confirmDownload to get a fresh confirmationToken"), structured), nil
 	}
 	if flowSession.State != mcpFlowStateConfirmed {
-		return mcpToolErrorResult("flow not confirmed", map[string]any{"sessionId": flowSession.ID, "state": flowSession.State}), nil
+		structured := map[string]any{"sessionId": flowSession.ID, "state": flowSession.State}
+		return mcpToolErrorResult(mcpErrorText("flow not confirmed", structured, "next: call confirmDownload first, then retry startDownload"), structured), nil
 	}
 	if strings.TrimSpace(flowSession.SelectedCandidate) == "" {
-		return mcpToolErrorResult("flow missing selected candidate", map[string]any{"sessionId": flowSession.ID}), nil
+		structured := map[string]any{"sessionId": flowSession.ID}
+		return mcpToolErrorResult(mcpErrorText("flow missing selected candidate", structured, "next: call confirmDownload with a candidateId"), structured), nil
 	}
 
 	songInfo, err := loadMCPCandidate(flowSession.SelectedCandidate, username)
 	if err != nil {
-		return mcpToolErrorResult("invalid candidate", map[string]any{"error": err.Error()}), nil
+		structured := map[string]any{"sessionId": flowSession.ID, "candidateId": flowSession.SelectedCandidate, "error": err.Error()}
+		return mcpToolErrorResult(mcpErrorText("invalid candidate", structured, "next: call searchSongs and confirmDownload again for a fresh candidate"), structured), nil
 	}
 
 	if reusedMediaID, exists, checkErr := mcpFindExistingLibraryMediaID(r.Context(), songInfo); checkErr != nil {
@@ -607,14 +615,15 @@ func (api *Router) mcpStartDownload(r *http.Request, args map[string]any) (any, 
 		name, singer := extractSongNameAndSinger(songInfo)
 		reasonKey := "online.error.song_already_exists_in_library"
 		reasonText := mcpTranslateByRequest(r, reasonKey, "song already exists in library")
-		return mcpToolErrorResult(reasonText, map[string]any{
+		structured := map[string]any{
 			"reason":          "already_exists",
 			"reasonKey":       reasonKey,
 			"reasonLocalized": reasonText,
 			"songName":        name,
 			"artist":          singer,
 			"mediaId":         reusedMediaID,
-		}), nil
+		}
+		return mcpToolErrorResult(mcpErrorText(reasonText, structured, "next: ask user to play existing song or pick another candidate"), structured), nil
 	}
 
 	songSource := strings.TrimSpace(asString(songInfo["source"]))
@@ -629,14 +638,16 @@ func (api *Router) mcpStartDownload(r *http.Request, args map[string]any) (any, 
 
 	settings, err := loadOnlineSourceSettings()
 	if err != nil {
-		return mcpToolErrorResult("could not load online settings", map[string]any{"error": err.Error()}), nil
+		structured := map[string]any{"error": err.Error()}
+		return mcpToolErrorResult(mcpErrorText("could not load online settings", structured, "next: check online source configuration"), structured), nil
 	}
 	downloadDir := strings.TrimSpace(settings.DownloadPath)
 	if downloadDir == "" {
 		downloadDir = defaultOnlineDownloadPath()
 	}
 	if err := os.MkdirAll(downloadDir, 0o755); err != nil {
-		return mcpToolErrorResult("could not create download directory", map[string]any{"error": err.Error()}), nil
+		structured := map[string]any{"error": err.Error()}
+		return mcpToolErrorResult(mcpErrorText("could not create download directory", structured, "next: verify directory permissions and free space"), structured), nil
 	}
 
 	normalized := normalizeOnlineDownloadSongInfo(songInfo)
@@ -675,7 +686,7 @@ func (api *Router) mcpStartDownload(r *http.Request, args map[string]any) (any, 
 		"flowSessionId": flowSession.ID,
 		"flowState":     mcpFlowStateDownloading,
 	}
-	return mcpToolResult("download task started", result), nil
+	return mcpToolResult(mcpStartDownloadResponseText(result), result), nil
 }
 
 func (api *Router) mcpGetDownloadStatus(args map[string]any) (any, *mcpRPCError) {
@@ -685,10 +696,11 @@ func (api *Router) mcpGetDownloadStatus(args map[string]any) (any, *mcpRPCError)
 	}
 	task, ok := getOnlineDownloadTask(taskID)
 	if !ok {
-		return mcpToolErrorResult("task not found", map[string]any{"taskId": taskID}), nil
+		structured := map[string]any{"taskId": taskID}
+		return mcpToolErrorResult(mcpErrorText("task not found", structured, "next: ensure taskId comes from startDownload"), structured), nil
 	}
 	status := mcpDownloadStatusFromTask(task)
-	return mcpToolResult("status retrieved", status), nil
+	return mcpToolResult(mcpDownloadStatusResponseText("status retrieved", status), status), nil
 }
 
 func (api *Router) mcpWaitDownload(r *http.Request, args map[string]any) (any, *mcpRPCError) {
@@ -720,22 +732,23 @@ func (api *Router) mcpWaitDownload(r *http.Request, args map[string]any) (any, *
 	for {
 		task, ok := getOnlineDownloadTask(taskID)
 		if !ok {
-			return mcpToolErrorResult("task not found", map[string]any{"taskId": taskID}), nil
+			structured := map[string]any{"taskId": taskID}
+			return mcpToolErrorResult(mcpErrorText("task not found", structured, "next: ensure taskId comes from startDownload"), structured), nil
 		}
 		status := mcpDownloadStatusFromTask(task)
 		switch task.Status {
 		case "completed":
 			status["waitResult"] = "completed"
-			return mcpToolResult("download completed", status), nil
+			return mcpToolResult(mcpDownloadStatusResponseText("download completed", status), status), nil
 		case "failed", "canceled":
 			status["waitResult"] = "failed"
-			return mcpToolErrorResult("download failed", status), nil
+			return mcpToolErrorResult(mcpDownloadStatusResponseText("download failed", status), status), nil
 		}
 
 		select {
 		case <-ctx.Done():
 			status["waitResult"] = "timeout"
-			return mcpToolResult("download still in progress", status), nil
+			return mcpToolResult(mcpDownloadStatusResponseText("download still in progress", status), status), nil
 		case <-ticker.C:
 		}
 	}
@@ -1239,6 +1252,216 @@ func mcpSearchCandidateCount(raw any) int {
 		return len(arr)
 	}
 	return 0
+}
+
+func mcpSearchResponseText(result map[string]any) string {
+	count := mcpSearchCandidateCount(result["candidates"])
+	sessionID := ""
+	if flow, ok := result["flow"].(map[string]any); ok {
+		sessionID = strings.TrimSpace(asString(flow["sessionId"]))
+	}
+	b := strings.Builder{}
+	b.WriteString(fmt.Sprintf("found %d candidates", count))
+	if sessionID != "" {
+		b.WriteString("\n")
+		b.WriteString("sessionId: ")
+		b.WriteString(sessionID)
+	}
+
+	candidatesAny, ok := result["candidates"].([]any)
+	if !ok || len(candidatesAny) == 0 {
+		if cands, ok2 := result["candidates"].([]map[string]any); ok2 {
+			candidatesAny = make([]any, 0, len(cands))
+			for _, c := range cands {
+				candidatesAny = append(candidatesAny, c)
+			}
+		}
+	}
+	if len(candidatesAny) == 0 {
+		return b.String()
+	}
+
+	b.WriteString("\n")
+	b.WriteString("candidates:")
+	maxLines := len(candidatesAny)
+	if maxLines > 10 {
+		maxLines = 10
+	}
+	for i := 0; i < maxLines; i++ {
+		candidate, ok := candidatesAny[i].(map[string]any)
+		if !ok {
+			continue
+		}
+		index := asInt(candidate["index"], i+1)
+		artist := strings.TrimSpace(asString(candidate["artist"]))
+		if artist == "" {
+			artist = strings.TrimSpace(asString(candidate["singer"]))
+		}
+		title := strings.TrimSpace(asString(candidate["songName"]))
+		if title == "" {
+			title = strings.TrimSpace(asString(candidate["name"]))
+		}
+		candidateID := strings.TrimSpace(asString(candidate["candidateId"]))
+		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("%d. %s - %s | candidateId=%s", index, singerOrUnknown(artist), titleOrUnknown(title), candidateID))
+	}
+	if len(candidatesAny) > maxLines {
+		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("... and %d more", len(candidatesAny)-maxLines))
+	}
+	b.WriteString("\n")
+	b.WriteString("next: choose one candidateId and call confirmDownload with sessionId + candidateId")
+	return b.String()
+}
+
+func mcpPingResponseText(result map[string]any) string {
+	b := strings.Builder{}
+	b.WriteString("pong")
+	b.WriteString("\nok: ")
+	b.WriteString(strconv.FormatBool(asBool(result["ok"], false)))
+	b.WriteString("\nserverTime: ")
+	b.WriteString(strings.TrimSpace(asString(result["serverTime"])))
+	b.WriteString("\nnext: call searchSongs with keyword/source/page/limit")
+	return b.String()
+}
+
+func mcpSearchErrorText(prefix string, structured map[string]any) string {
+	b := strings.Builder{}
+	b.WriteString(prefix)
+	if reason := strings.TrimSpace(asString(structured["reason"])); reason != "" {
+		b.WriteString("\nreason: ")
+		b.WriteString(reason)
+	}
+	if requestKey := strings.TrimSpace(asString(structured["requestKey"])); requestKey != "" {
+		b.WriteString("\nrequestKey: ")
+		b.WriteString(requestKey)
+	}
+	b.WriteString("\nelapsedMs: ")
+	b.WriteString(fmt.Sprintf("%d", asInt(structured["elapsedMs"], 0)))
+	if retryAfterMs, ok := structured["retryAfterMs"]; ok {
+		b.WriteString("\nretryAfterMs: ")
+		b.WriteString(fmt.Sprintf("%d", asInt(retryAfterMs, 0)))
+	}
+	if errText := strings.TrimSpace(asString(structured["error"])); errText != "" {
+		b.WriteString("\nerror: ")
+		b.WriteString(errText)
+	}
+	b.WriteString("\nnext: retry searchSongs with same keyword or simplify keyword")
+	return b.String()
+}
+
+func mcpConfirmResponseText(result map[string]any) string {
+	b := strings.Builder{}
+	b.WriteString("candidate confirmed")
+	b.WriteString("\nsessionId: ")
+	b.WriteString(strings.TrimSpace(asString(result["sessionId"])))
+	b.WriteString("\nstate: ")
+	b.WriteString(strings.TrimSpace(asString(result["state"])))
+	b.WriteString("\nselectedCandidateId: ")
+	b.WriteString(strings.TrimSpace(asString(result["selectedCandidateId"])))
+	b.WriteString("\nconfirmationToken: ")
+	b.WriteString(strings.TrimSpace(asString(result["confirmationToken"])))
+	b.WriteString("\nselectedSong: ")
+	b.WriteString(singerOrUnknown(strings.TrimSpace(asString(result["artist"]))))
+	b.WriteString(" - ")
+	b.WriteString(titleOrUnknown(strings.TrimSpace(asString(result["songName"]))))
+	b.WriteString("\nnext: call startDownload with confirmationToken")
+	return b.String()
+}
+
+func mcpStartDownloadResponseText(result map[string]any) string {
+	b := strings.Builder{}
+	b.WriteString("download task started")
+	b.WriteString("\ntaskId: ")
+	b.WriteString(strings.TrimSpace(asString(result["taskId"])))
+	b.WriteString("\nstatus: ")
+	b.WriteString(strings.TrimSpace(asString(result["status"])))
+	b.WriteString("\nquality: ")
+	b.WriteString(strings.TrimSpace(asString(result["quality"])))
+	b.WriteString("\nsource: ")
+	b.WriteString(strings.TrimSpace(asString(result["source"])))
+	b.WriteString("\nsongName: ")
+	b.WriteString(titleOrUnknown(strings.TrimSpace(asString(result["songName"]))))
+	b.WriteString("\nflowSessionId: ")
+	b.WriteString(strings.TrimSpace(asString(result["flowSessionId"])))
+	b.WriteString("\nnext: poll with getDownloadStatus or waitDownload using taskId")
+	return b.String()
+}
+
+func mcpDownloadStatusResponseText(prefix string, status map[string]any) string {
+	b := strings.Builder{}
+	b.WriteString(prefix)
+	b.WriteString("\ntaskId: ")
+	b.WriteString(strings.TrimSpace(asString(status["taskId"])))
+	b.WriteString("\nstatus: ")
+	b.WriteString(strings.TrimSpace(asString(status["status"])))
+	b.WriteString("\nprogress: ")
+	b.WriteString(fmt.Sprintf("%d", asInt(status["progress"], 0)))
+	b.WriteString("\ncompleted: ")
+	b.WriteString(strconv.FormatBool(asBool(status["completed"], false)))
+	b.WriteString("\nfailed: ")
+	b.WriteString(strconv.FormatBool(asBool(status["failed"], false)))
+	if waitResult := strings.TrimSpace(asString(status["waitResult"])); waitResult != "" {
+		b.WriteString("\nwaitResult: ")
+		b.WriteString(waitResult)
+	}
+	if errText := strings.TrimSpace(asString(status["error"])); errText != "" {
+		b.WriteString("\nerror: ")
+		b.WriteString(errText)
+	}
+	b.WriteString("\nnext: if not terminal, continue waiting with waitDownload or poll getDownloadStatus")
+	return b.String()
+}
+
+func mcpErrorText(prefix string, structured map[string]any, nextAction string) string {
+	b := strings.Builder{}
+	b.WriteString(prefix)
+	if structured != nil {
+		if sessionID := strings.TrimSpace(asString(structured["sessionId"])); sessionID != "" {
+			b.WriteString("\nsessionId: ")
+			b.WriteString(sessionID)
+		}
+		if candidateID := strings.TrimSpace(asString(structured["candidateId"])); candidateID != "" {
+			b.WriteString("\ncandidateId: ")
+			b.WriteString(candidateID)
+		}
+		if token := strings.TrimSpace(asString(structured["confirmationToken"])); token != "" {
+			b.WriteString("\nconfirmationToken: ")
+			b.WriteString(token)
+		}
+		if taskID := strings.TrimSpace(asString(structured["taskId"])); taskID != "" {
+			b.WriteString("\ntaskId: ")
+			b.WriteString(taskID)
+		}
+		if songName := strings.TrimSpace(asString(structured["songName"])); songName != "" {
+			artist := strings.TrimSpace(asString(structured["artist"]))
+			b.WriteString("\nsong: ")
+			b.WriteString(singerOrUnknown(artist))
+			b.WriteString(" - ")
+			b.WriteString(titleOrUnknown(songName))
+		}
+		if mediaID := strings.TrimSpace(asString(structured["mediaId"])); mediaID != "" {
+			b.WriteString("\nmediaId: ")
+			b.WriteString(mediaID)
+		}
+		if state := strings.TrimSpace(asString(structured["state"])); state != "" {
+			b.WriteString("\nstate: ")
+			b.WriteString(state)
+		}
+		if reason := strings.TrimSpace(asString(structured["reason"])); reason != "" {
+			b.WriteString("\nreason: ")
+			b.WriteString(reason)
+		}
+		if errText := strings.TrimSpace(asString(structured["error"])); errText != "" {
+			b.WriteString("\nerror: ")
+			b.WriteString(errText)
+		}
+	}
+	if strings.TrimSpace(nextAction) != "" {
+		b.WriteString("\n")
+		b.WriteString(nextAction)
+	}
+	return b.String()
 }
 
 func cloneStringMapAny(src map[string]any) map[string]any {
