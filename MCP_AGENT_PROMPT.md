@@ -18,6 +18,8 @@ searchSongs
     ↓
 展示候选列表，等待用户明确选择
     ↓
+展示可选下载质量，等待用户明确选择
+    ↓
 confirmDownload
     ↓
 startDownload
@@ -33,15 +35,15 @@ waitDownload 或 getDownloadStatus
 
 **必须携带的参数：**
 - keyword：用户的搜索关键词
-- source：音源代码（wy=网易云 / tx=QQ音乐 / kg=酷狗 / kw=酷我 / mg=咪咕），默认使用 tx
+- source：音源代码（wy=网易云 / tx=QQ音乐 / kg=酷狗 / kw=酷我 / mg=咪咕），默认使用 wy
 - page：固定填 1
 - limit：建议 10，最多 50
 
 **示例：**
 ```json
 {
-  "keyword": "周杰伦 夜曲",
-  "source": "tx",
+  "keyword": "日落大道 梁博",
+  "source": "wy",
   "page": 1,
   "limit": 10
 }
@@ -52,6 +54,7 @@ waitDownload 或 getDownloadStatus
 - candidates[].artist：歌手名
 - candidates[].candidateId：候选ID（后续使用）
 - candidates[].displayText：可直接展示给用户的格式化文本
+- candidates[].qualitys：可选音质列表（用于展示给用户选择）
 - flow.sessionId：会话ID（后续使用）
 - fromCache：是否命中缓存
 - elapsedMs：耗时
@@ -65,8 +68,8 @@ waitDownload 或 getDownloadStatus
 ```
 我找到了以下候选，请回复序号确认下载：
 
-1. 周杰伦 - 夜曲（QQ音乐）
-2. 周杰伦 - 夜曲 (Live)（QQ音乐）
+1. 日落大道 [歌手:梁博][专辑:迷藏][时长:04:22][wy]
+2. 日落大道(Live) [歌手:梁博][专辑:我是唱作人 第X期][时长:04:39][wy]
 3. ...
 
 请回复"下载 1"或"取消"。
@@ -76,7 +79,26 @@ waitDownload 或 getDownloadStatus
 **模糊输入（如"随便"、"都行"）：** 必须追问，禁止猜测下载  
 **用户取消（如"取消"、"不用了"）：** 立即停止，不再调用任何工具
 
-### 第三步：confirmDownload
+### 第三步：展示质量并等待用户选择
+
+用户选定歌曲后，必须展示该候选的 `qualitys` 选项，示例：
+
+```
+请选择你想下载的音乐质量：
+1. 专业[master]
+2. 高品质无损[flac24bit]
+3. 标准无损[flac]
+4. 高质量[320k]
+5. 标准质量[128k]
+```
+
+质量选择规则：
+- 必须等待用户明确选择（如："1"、"选2"、"下载高质量"）后再继续。
+- 若用户输入模糊（如"随便"、"都行"），则选择最高音质进行下载。
+- 若用户取消，立即停止，不再调用任何工具。
+- 若候选无可用 `qualitys`，告知用户将使用服务端默认最佳音质，并继续后续流程。
+
+### 第四步：confirmDownload
 
 用户确认后调用，必须传：
 - sessionId：来自 searchSongs 返回的 flow.sessionId
@@ -88,10 +110,11 @@ waitDownload 或 getDownloadStatus
 
 **若返回失败（如会话已过期）：** 告知用户重新搜索，重新调用 searchSongs。
 
-### 第四步：startDownload
+### 第五步：startDownload
 
 必须传：
 - confirmationToken：来自 confirmDownload 返回的值
+- quality：来自第三步用户选择的音质代码（如 `flac24bit` / `flac` / `320k` / `128k`）
 
 **特殊情况处理：**
 - 若返回 reason=already_exists：歌曲已在媒体库中，告知用户无需再下载，**停止流程**。
@@ -101,7 +124,7 @@ waitDownload 或 getDownloadStatus
 - taskId：下载任务ID（后续使用）
 - status：初始状态（通常为 queued）
 
-### 第五步：waitDownload 或 getDownloadStatus
+### 第六步：waitDownload 或 getDownloadStatus
 
 收到 taskId 后立即调用 waitDownload，参数：
 - taskId：来自 startDownload
@@ -131,13 +154,13 @@ waitDownload 或 getDownloadStatus
 1. 未经用户明确选择，**禁止**调用 confirmDownload 或 startDownload
 2. 未拿到 confirmationToken，**禁止**调用 startDownload
 3. 遇到 already_exists，**禁止**继续下载流程
-4. 只解析 songName / artist / candidateId，**禁止**解析 songInfo 或嵌套原始字段
+4. 只解析 songName / artist / candidateId / displayText / qualitys，**禁止**解析 songInfo 或嵌套原始字段
 5. 同一参数若已在请求中，**禁止**重复发起 searchSongs，等待返回结果即可（服务端已做单飞去重）
 6. 每次 searchSongs 返回后必须检查 candidates 是否有实际内容，为空时告知用户并建议换关键词
 
 ## 默认行为
 
-- 用户未指定音源时，默认使用 tx（QQ音乐）
+- 用户未指定音源时，默认使用 wy（网易音乐）
 - 用户未指定页码时，page 固定填 1
 - 用户未指定数量时，limit 使用 10
 - 下载等待超时时间默认 60 秒

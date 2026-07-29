@@ -494,11 +494,11 @@ func (api *Router) mcpBuildSearchSongsResult(ctx context.Context, source, keywor
 			"singer":      singer,
 			"songName":    name,
 			"artist":      singer,
-			"displayText": fmt.Sprintf("%d. %s - %s", i+1, singerOrUnknown(singer), titleOrUnknown(name)),
+			"displayText": mcpCandidateDisplayText(i+1, name, singer, asString(songInfo["albumName"]), songInfo["duration"], asString(songInfo["source"])),
 			"albumName":   asString(songInfo["albumName"]),
 			"duration":    songInfo["duration"],
 			"source":      asString(songInfo["source"]),
-			"qualitys":    songInfo["qualitys"],
+			"qualitys":    mcpQualityList(songInfo["qualitys"]),
 		}
 		if includeRawSongInfo {
 			candidateMap["songInfo"] = songInfo
@@ -521,7 +521,14 @@ func (api *Router) mcpBuildSearchSongsResult(ctx context.Context, source, keywor
 
 	for idx, entry := range scored {
 		entry.raw["index"] = idx + 1
-		entry.raw["displayText"] = fmt.Sprintf("%d. %s - %s", idx+1, singerOrUnknown(asString(entry.raw["artist"])), titleOrUnknown(asString(entry.raw["songName"])))
+		entry.raw["displayText"] = mcpCandidateDisplayText(
+			idx+1,
+			asString(entry.raw["songName"]),
+			asString(entry.raw["artist"]),
+			asString(entry.raw["albumName"]),
+			entry.raw["duration"],
+			asString(entry.raw["source"]),
+		)
 		candidates = append(candidates, entry.raw)
 	}
 
@@ -1293,17 +1300,20 @@ func mcpSearchResponseText(result map[string]any) string {
 			continue
 		}
 		index := asInt(candidate["index"], i+1)
-		artist := strings.TrimSpace(asString(candidate["artist"]))
-		if artist == "" {
-			artist = strings.TrimSpace(asString(candidate["singer"]))
-		}
-		title := strings.TrimSpace(asString(candidate["songName"]))
-		if title == "" {
-			title = strings.TrimSpace(asString(candidate["name"]))
+		displayText := strings.TrimSpace(asString(candidate["displayText"]))
+		if displayText == "" {
+			displayText = mcpCandidateDisplayText(
+				index,
+				asString(candidate["songName"]),
+				asString(candidate["artist"]),
+				asString(candidate["albumName"]),
+				candidate["duration"],
+				asString(candidate["source"]),
+			)
 		}
 		candidateID := strings.TrimSpace(asString(candidate["candidateId"]))
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("%d. %s - %s | candidateId=%s", index, singerOrUnknown(artist), titleOrUnknown(title), candidateID))
+		b.WriteString(fmt.Sprintf("%s | candidateId=%s", displayText, candidateID))
 	}
 	if len(candidatesAny) > maxLines {
 		b.WriteString("\n")
@@ -1545,8 +1555,100 @@ func mcpCandidateSongInfoFromResult(candidate map[string]any) map[string]any {
 		"albumName": asString(candidate["albumName"]),
 		"duration":  candidate["duration"],
 		"source":    source,
-		"qualitys":  candidate["qualitys"],
+		"qualitys":  mcpQualityMap(candidate["qualitys"]),
 	}
+}
+
+func mcpQualityList(raw any) []string {
+	mapValue := mcpQualityMap(raw)
+	if len(mapValue) == 0 {
+		return []string{}
+	}
+	preferred := []string{"master", "flac24bit", "ape", "flac", "320k", "128k"}
+	out := make([]string, 0, len(mapValue))
+	seen := map[string]struct{}{}
+	for _, key := range preferred {
+		if _, ok := mapValue[key]; ok {
+			out = append(out, key)
+			seen[key] = struct{}{}
+		}
+	}
+	extra := make([]string, 0)
+	for key := range mapValue {
+		if _, ok := seen[key]; !ok {
+			extra = append(extra, key)
+		}
+	}
+	sort.Strings(extra)
+	out = append(out, extra...)
+	return out
+}
+
+func mcpQualityMap(raw any) map[string]any {
+	result := map[string]any{}
+	add := func(key string, value any) {
+		k := strings.TrimSpace(key)
+		if k == "" {
+			return
+		}
+		switch typed := value.(type) {
+		case nil:
+			result[k] = true
+		case bool:
+			if typed {
+				result[k] = true
+			}
+		case float64:
+			if typed > 0 {
+				result[k] = typed
+			}
+		case int:
+			if typed > 0 {
+				result[k] = typed
+			}
+		case int32:
+			if typed > 0 {
+				result[k] = typed
+			}
+		case int64:
+			if typed > 0 {
+				result[k] = typed
+			}
+		case string:
+			trimmed := strings.TrimSpace(typed)
+			if trimmed != "" {
+				result[k] = trimmed
+			}
+		default:
+			result[k] = typed
+		}
+	}
+
+	switch typed := raw.(type) {
+	case map[string]any:
+		for k, v := range typed {
+			add(k, v)
+		}
+	case []any:
+		for _, item := range typed {
+			switch t := item.(type) {
+			case string:
+				add(t, true)
+			case map[string]any:
+				key := strings.TrimSpace(asString(t["type"]))
+				if key == "" {
+					continue
+				}
+				if size, ok := t["size"]; ok {
+					add(key, size)
+				} else {
+					add(key, true)
+				}
+			}
+		}
+	}
+
+	return result
 }
 
 func computeKeywordRelevance(tokens []string, name, singer, album string) int {
@@ -1564,6 +1666,74 @@ func computeKeywordRelevance(tokens []string, name, singer, album string) int {
 		}
 	}
 	return score
+}
+
+func mcpCandidateDisplayText(index int, songName, singer, album string, duration any, source string) string {
+	title := titleOrUnknown(strings.TrimSpace(songName))
+	artist := singerOrUnknown(strings.TrimSpace(singer))
+	albumName := strings.TrimSpace(album)
+	if albumName == "" {
+		albumName = "Unknown album"
+	}
+	durationText := mcpFormatDisplayDuration(duration)
+	sourceCode := strings.TrimSpace(source)
+	if sourceCode == "" {
+		sourceCode = "unknown"
+	}
+	return fmt.Sprintf("%d.%s [歌手:%s][专辑:%s][时长:%s][%s]", index, title, artist, albumName, durationText, sourceCode)
+}
+
+func mcpFormatDisplayDuration(value any) string {
+	if sec := onlineLyricSecondsFromInterval(asString(value)); sec > 0 {
+		return mcpSecondsToMMSS(sec)
+	}
+	sec := mcpNumericDurationSeconds(value)
+	if sec <= 0 {
+		return "00:00"
+	}
+	return mcpSecondsToMMSS(sec)
+}
+
+func mcpNumericDurationSeconds(value any) int {
+	toSeconds := func(v float64) int {
+		if v <= 0 {
+			return 0
+		}
+		if v >= 1000 {
+			return int((v / 1000) + 0.5)
+		}
+		return int(v + 0.5)
+	}
+
+	switch typed := value.(type) {
+	case int:
+		return toSeconds(float64(typed))
+	case int32:
+		return toSeconds(float64(typed))
+	case int64:
+		return toSeconds(float64(typed))
+	case float32:
+		return toSeconds(float64(typed))
+	case float64:
+		return toSeconds(typed)
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		if err != nil {
+			return 0
+		}
+		return toSeconds(parsed)
+	default:
+		return 0
+	}
+}
+
+func mcpSecondsToMMSS(sec int) string {
+	if sec <= 0 {
+		return "00:00"
+	}
+	min := sec / 60
+	remain := sec % 60
+	return fmt.Sprintf("%02d:%02d", min, remain)
 }
 
 func mcpToolResult(text string, structured map[string]any) map[string]any {
