@@ -2401,11 +2401,25 @@ func deleteOnlineDownloadTask(id string) {
 // UpdatedAt is older than onlineDownloadTaskTTL. Returns the number
 // of tasks removed so the caller can broadcast a change event after
 // releasing the write lock.
+//
+// IMPORTANT: the on-disk FilePath is only deleted for browser-mode
+// tasks. Server-mode tasks write directly into the user's music
+// library (task.DownloadDir == conf.Server.MusicFolder), so their
+// FilePath points at a file that has already been scanned and imported
+// into the Navidrome library. Deleting it here would silently
+// disappear the user's music the next time the watcher scans and
+// reports tracksMissing=N — see the watcher log line
+// "Scanner: Completed processing folder tracksMissing=N".
+//
+// Browser-mode tasks, on the other hand, use os.CreateTemp("", ...)
+// for their FilePath, which lives in os.TempDir() and is meant to be
+// garbage-collected once the user has finished downloading. Those
+// are safe to delete here.
 func cleanupExpiredOnlineDownloadTasksLocked(now time.Time) int {
 	removed := 0
 	for id, task := range onlineDownloadTasks.items {
 		if now.Sub(task.UpdatedAt) > onlineDownloadTaskTTL {
-			if task.FilePath != "" {
+			if task.FilePath != "" && task.Mode != "server" {
 				_ = os.Remove(task.FilePath)
 			}
 			delete(onlineDownloadTasks.items, id)
