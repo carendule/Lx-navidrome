@@ -18,7 +18,7 @@ import (
 
 	"github.com/deluan/rest"
 	"github.com/go-chi/chi/v5"
-	"github.com/navidrome/navidrome/core"
+	"github.com/navidrome/navidrome/core/artwork"
 	"github.com/navidrome/navidrome/core/playlists"
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
@@ -256,7 +256,7 @@ func uploadPlaylistImage(pls playlists.Playlists) http.HandlerFunc {
 }
 
 func fetchPlaylistImage(pls playlists.Playlists) http.HandlerFunc {
-	maxImageSize := core.MaxImageUploadSize()
+	maxImageSize := artwork.MaxImageUploadSize()
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		if !checkImageUploadPermission(w, r) {
