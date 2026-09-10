@@ -224,6 +224,7 @@
         "saveQueue": "Save Queue to Playlist",
         "makePublic": "Make Public",
         "makePrivate": "Make Private",
+        "mergePlaylists": "Merge Playlists",
         "searchOrCreate": "Search playlists or type to create new...",
         "pressEnterToCreate": "Press Enter to create new playlist",
         "removeFromSelection": "Remove from selection"
@@ -232,7 +233,9 @@
         "duplicate_song": "Add duplicated songs",
         "song_exist": "There are duplicates being added to the playlist. Would you like to add the duplicates or skip them?",
         "noPlaylistsFound": "No playlists found",
-        "noPlaylists": "No playlists available"
+        "noPlaylists": "No playlists available",
+        "merging": "Merging playlists (%{current}/%{total})...",
+        "playlistsMerged": "Playlists merged successfully"
       }
     },
     "radio": {

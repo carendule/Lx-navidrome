@@ -220,6 +220,7 @@
         "saveQueue": "保存为歌单",
         "makePublic": "设为公开",
         "makePrivate": "设为私有",
+        "mergePlaylists": "合并歌单",
         "searchOrCreate": "搜索歌单，或输入名称以创建…",
         "pressEnterToCreate": "按 Enter 键创建歌单",
         "removeFromSelection": "移除选中项"
@@ -228,7 +229,9 @@
         "duplicate_song": "添加了重复的歌曲",
         "song_exist": "部分选定的歌曲已存在歌单中，继续添加或是跳过它们？",
         "noPlaylistsFound": "未找到歌单",
-        "noPlaylists": "暂无可用歌单"
+        "noPlaylists": "暂无可用歌单",
+        "merging": "正在合并歌单 (%{current}/%{total})…",
+        "playlistsMerged": "歌单合并成功"
       }
     },
     "radio": {

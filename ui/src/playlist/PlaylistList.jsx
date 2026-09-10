@@ -33,6 +33,7 @@ import FavoriteIcon from '@material-ui/icons/Favorite'
 import config from '../config'
 import PlaylistListActions from './PlaylistListActions'
 import ChangePublicStatusButton from './ChangePublicStatusButton'
+import MergePlaylistsButton from './MergePlaylistsButton'
 
 const useStyles = makeStyles((theme) => ({
   button: {
@@ -134,6 +135,9 @@ const PlaylistListBulkActions = (props) => {
   const classes = useStyles()
   return (
     <>
+      {props.selectedIds?.length >= 2 && (
+        <MergePlaylistsButton {...props} className={classes.button} />
+      )}
       <ChangePublicStatusButton
         public={true}
         {...props}

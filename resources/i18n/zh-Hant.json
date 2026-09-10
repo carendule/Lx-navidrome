@@ -218,6 +218,7 @@
         "export": "匯出",
         "makePublic": "設為公開",
         "makePrivate": "設為私人",
+        "mergePlaylists": "合併播放清單",
         "saveQueue": "將播放佇列儲存到播放清單",
         "searchOrCreate": "搜尋播放清單，或輸入名稱來新建…",
         "pressEnterToCreate": "按 Enter 鍵建立新的播放清單",
@@ -227,7 +228,9 @@
         "duplicate_song": "加入重複的歌曲",
         "song_exist": "有重複歌曲正要加入播放清單，您要加入或略過重複歌曲？",
         "noPlaylistsFound": "找不到播放清單",
-        "noPlaylists": "暫無播放清單"
+        "noPlaylists": "暫無播放清單",
+        "merging": "正在合併播放清單 (%{current}/%{total})…",
+        "playlistsMerged": "播放清單合併成功"
       }
     },
     "radio": {

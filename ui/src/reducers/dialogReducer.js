@@ -17,6 +17,8 @@ import {
   SAVE_QUEUE_CLOSE,
   SHARE_MENU_OPEN,
   SHARE_MENU_CLOSE,
+  MERGE_PLAYLISTS_OPEN,
+  MERGE_PLAYLISTS_CLOSE,
 } from '../actions'
 
 export const shareDialogReducer = (
@@ -181,6 +183,28 @@ export const saveQueueDialogReducer = (
     case SAVE_QUEUE_OPEN:
       return { ...previousState, open: true }
     case SAVE_QUEUE_CLOSE:
+      return { ...previousState, open: false }
+    default:
+      return previousState
+  }
+}
+
+export const mergePlaylistsDialogReducer = (
+  previousState = {
+    open: false,
+    selectedIds: [],
+  },
+  payload,
+) => {
+  const { type } = payload
+  switch (type) {
+    case MERGE_PLAYLISTS_OPEN:
+      return {
+        ...previousState,
+        open: true,
+        selectedIds: payload.selectedIds,
+      }
+    case MERGE_PLAYLISTS_CLOSE:
       return { ...previousState, open: false }
     default:
       return previousState

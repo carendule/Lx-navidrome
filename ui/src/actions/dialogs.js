@@ -10,6 +10,8 @@ export const LISTENBRAINZ_TOKEN_OPEN = 'LISTENBRAINZ_TOKEN_OPEN'
 export const LISTENBRAINZ_TOKEN_CLOSE = 'LISTENBRAINZ_TOKEN_CLOSE'
 export const SAVE_QUEUE_OPEN = 'SAVE_QUEUE_OPEN'
 export const SAVE_QUEUE_CLOSE = 'SAVE_QUEUE_CLOSE'
+export const MERGE_PLAYLISTS_OPEN = 'MERGE_PLAYLISTS_OPEN'
+export const MERGE_PLAYLISTS_CLOSE = 'MERGE_PLAYLISTS_CLOSE'
 export const DOWNLOAD_MENU_ALBUM = 'album'
 export const DOWNLOAD_MENU_ARTIST = 'artist'
 export const DOWNLOAD_MENU_PLAY = 'playlist'
@@ -85,4 +87,13 @@ export const openSaveQueueDialog = () => ({
 
 export const closeSaveQueueDialog = () => ({
   type: SAVE_QUEUE_CLOSE,
+})
+
+export const openMergePlaylists = ({ selectedIds }) => ({
+  type: MERGE_PLAYLISTS_OPEN,
+  selectedIds,
+})
+
+export const closeMergePlaylists = () => ({
+  type: MERGE_PLAYLISTS_CLOSE,
 })
