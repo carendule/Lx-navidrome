@@ -9,6 +9,7 @@ import (
 	"github.com/navidrome/navidrome/model"
 	"github.com/navidrome/navidrome/model/criteria"
 	"github.com/navidrome/navidrome/model/request"
+	"github.com/navidrome/navidrome/utils/slice"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/pocketbase/dbx"
@@ -44,6 +45,23 @@ var _ = Describe("PlaylistRepository - Smart Playlists", func() {
 			})
 		})
 
+		Context("after an evaluation", func() {
+			It("stamps updated_at and evaluated_at with the same instant", func() {
+				newPls := model.Playlist{Name: "Evaluated", OwnerID: "userid", Rules: rules}
+				Expect(repo.Put(&newPls)).To(Succeed())
+				DeferCleanup(func() { _ = repo.Delete(newPls.ID) })
+
+				refreshed, err := repo.GetWithTracks(newPls.ID, true, false)
+				Expect(err).ToNot(HaveOccurred())
+
+				stored, err := repo.Get(newPls.ID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.EvaluatedAt).ToNot(BeNil())
+				Expect(stored.UpdatedAt).To(BeTemporally("==", *stored.EvaluatedAt))
+				Expect(refreshed.UpdatedAt).To(BeTemporally("==", stored.UpdatedAt))
+			})
+		})
+
 		Context("invalid rules", func() {
 			It("fails to Put it in the DB", func() {
 				rules = &criteria.Criteria{
@@ -54,6 +72,41 @@ var _ = Describe("PlaylistRepository - Smart Playlists", func() {
 				}
 				newPls := model.Playlist{Name: "Great!", OwnerID: "userid", Rules: rules}
 				Expect(repo.Put(&newPls)).To(MatchError(ContainSubstring("invalid criteria expression")))
+			})
+		})
+
+		Context("re-imported from disk", func() {
+			// The scanner re-imports every playlist in a touched folder, and a freshly parsed
+			// .nsp carries no counters — saving it must not wipe the ones already evaluated.
+			It("keeps the stored counters when a freshly parsed playlist is saved over it", func() {
+				rules = &criteria.Criteria{
+					Expression: criteria.All{
+						criteria.Contains{"title": "Antenna"},
+					},
+				}
+				pls := model.Playlist{Name: "Smart", OwnerID: "userid", Rules: rules, Path: "/music/smart.nsp", Sync: true}
+				Expect(repo.Put(&pls)).To(Succeed())
+				DeferCleanup(func() { _ = repo.Delete(pls.ID) })
+
+				evaluated, err := repo.GetWithTracks(pls.ID, true, false)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(evaluated.SongCount).To(BeNumerically(">", 0))
+
+				stored, err := repo.Get(pls.ID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.SongCount).To(Equal(evaluated.SongCount))
+
+				reimported := model.Playlist{
+					ID: pls.ID, Name: pls.Name, OwnerID: "userid", Rules: rules,
+					Path: pls.Path, Sync: true,
+				}
+				Expect(repo.Put(&reimported)).To(Succeed())
+
+				afterImport, err := repo.Get(pls.ID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(afterImport.SongCount).To(Equal(stored.SongCount))
+				Expect(afterImport.Duration).To(Equal(stored.Duration))
+				Expect(afterImport.Size).To(Equal(stored.Size))
 			})
 		})
 
@@ -389,6 +442,40 @@ var _ = Describe("PlaylistRepository - Smart Playlists", func() {
 				stringIDs[i] = t.MediaFileID
 			}
 			Expect(stringIDs).To(ConsistOf(boolIDs))
+		})
+	})
+
+	Describe("Smart Playlists with Album Aggregate Criteria", func() {
+		BeforeEach(func() {
+			DeferCleanup(configtest.SetupConfig())
+			conf.Server.SmartPlaylistRefreshDelay = -1 * time.Second
+		})
+
+		trackIDsOf := func(rules *criteria.Criteria) []string {
+			newPls := model.Playlist{Name: "Album Aggregates", OwnerID: "userid", Rules: rules}
+			Expect(repo.Put(&newPls)).To(Succeed())
+			DeferCleanup(func() { _ = repo.Delete(newPls.ID) })
+
+			pls, err := repo.GetWithTracks(newPls.ID, true, false)
+			Expect(err).ToNot(HaveOccurred())
+			return slice.Map(pls.Tracks, func(t model.PlaylistTrack) string { return t.MediaFileID })
+		}
+
+		It("filters on albumSongCount", func() {
+			// albumMultiDisc (ID "104") is the only fixture album with SongCount > 3
+			rules := &criteria.Criteria{Expression: criteria.All{criteria.Gt{"albumSongCount": 3}}}
+
+			Expect(trackIDsOf(rules)).To(ConsistOf("2001", "2002", "2003", "2004"))
+		})
+
+		It("sorts by an album field not referenced in the expression (issue #5347)", func() {
+			// All four tracks share album 104, so the album date ties and disc/track number decide.
+			rules := &criteria.Criteria{
+				Expression: criteria.All{criteria.Is{"album": "Multi Disc Album"}},
+				Sort:       "-albumDateAdded,discNumber,trackNumber",
+			}
+
+			Expect(trackIDsOf(rules)).To(HaveExactElements("2002", "2004", "2003", "2001"))
 		})
 	})
 

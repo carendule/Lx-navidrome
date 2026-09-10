@@ -13,6 +13,7 @@ import (
 
 type Playlist struct {
 	Annotations `structs:"-"`
+	ItemImage   `structs:"-"`
 
 	ID               string         `structs:"id" json:"id"`
 	Name             string         `structs:"name" json:"name"`
@@ -30,6 +31,7 @@ type Playlist struct {
 	ExternalImageURL string         `structs:"external_image_url" json:"externalImageUrl,omitempty"`
 	CreatedAt        time.Time      `structs:"created_at" json:"createdAt"`
 	UpdatedAt        time.Time      `structs:"updated_at" json:"updatedAt"`
+	ImportedHash     string         `structs:"imported_hash" json:"-"`
 
 	// SmartPlaylist attributes
 	Rules       *criteria.Criteria `structs:"rules" json:"rules"`
@@ -38,6 +40,11 @@ type Playlist struct {
 
 func (pls Playlist) IsSmartPlaylist() bool {
 	return pls.Rules != nil && pls.Rules.Expression != nil
+}
+
+// TracksEditable reports whether the track list is user-owned rather than server-managed.
+func (pls Playlist) TracksEditable() bool {
+	return !pls.IsSmartPlaylist() && !pls.Sync
 }
 
 // RefreshDelay returns the playlist's own refresh window when set, falling

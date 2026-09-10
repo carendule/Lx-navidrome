@@ -104,6 +104,7 @@ func (api *Router) routes() http.Handler {
 		// player) even before the first playback report.
 		r.Use(api.withPlayer)
 		r.Get("/system/info", api.getSystemInfo)
+		r.Get("/system/endpoint", api.getEndpointInfo)
 		r.Get("/userviews", api.getUserViews)
 		r.Get("/users/{userId}/views", api.getUserViews)
 		r.Get("/users/me", api.getCurrentUser)
@@ -117,6 +118,7 @@ func (api *Router) routes() http.Handler {
 			r.Use(throttleStreams(conf.Server.Jellyfin.MaxConcurrentStreams))
 			r.Get("/items", api.getItems)
 			r.Get("/users/{userId}/items", api.getItems)
+			r.Get("/items/latest", api.getLatest)
 			r.Get("/users/{userId}/items/latest", api.getLatest)
 			r.Get("/artists", api.getArtists)
 			r.Get("/artists/albumartists", api.getAlbumArtists)
@@ -143,6 +145,7 @@ func (api *Router) routes() http.Handler {
 
 		r.Get("/artists/{itemId}/similar", api.getSimilarArtists)
 		r.Get("/items/{itemId}/similar", api.getSimilarItems)
+		r.Get("/albums/{itemId}/similar", api.getSimilarAlbums)
 		r.Get("/items/{itemId}/instantmix", api.getInstantMix)
 		r.Get("/genres", api.getGenres)
 		r.Get("/musicgenres", api.getGenres)

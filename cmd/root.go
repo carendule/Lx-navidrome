@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/consts"
+	"github.com/navidrome/navidrome/core/artwork"
 	"github.com/navidrome/navidrome/db"
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
@@ -88,6 +90,9 @@ func runNavidrome(ctx context.Context) {
 	g.Go(startInsightsCollector(ctx))
 	g.Go(scheduleDBAnalyzer(ctx))
 	g.Go(startPluginManager(ctx))
+	artworkWorker := CreateArtworkWorker()
+	g.Go(startArtworkWorker(ctx, artworkWorker))
+	g.Go(scheduleArtworkHousekeeping(ctx, artworkWorker))
 	g.Go(runInitialScan(ctx))
 	if conf.Server.Scanner.Enabled {
 		g.Go(startScanWatcher(ctx))
@@ -134,13 +139,21 @@ func startServer(ctx context.Context) func() error {
 			a.MountRouter("Prometheus metrics", conf.Server.Prometheus.MetricsPath, p.GetHandler())
 		}
 		if conf.Server.DevEnableProfiler {
-			a.MountRouter("Profiling", "/debug", middleware.Profiler())
+			a.MountRouter("Profiling", "/debug", profilerHandler())
 		}
 		if strings.HasPrefix(conf.Server.UILoginBackgroundURL, "/") {
 			a.MountRouter("Background images", conf.Server.UILoginBackgroundURL, backgrounds.NewHandler())
 		}
 		return a.Run(ctx, conf.Server.Address, conf.Server.Port, conf.Server.TLSCert, conf.Server.TLSKey)
 	}
+}
+
+// profilerHandler returns the pprof handler. net/http/pprof resolves the profile
+// name from the raw request path, so the BasePath has to come off first.
+func profilerHandler() http.Handler {
+	// A trailing or root slash would make StripPrefix drop the leading slash chi needs.
+	basePath := strings.TrimRight(conf.Server.BasePath, "/")
+	return http.StripPrefix(basePath, middleware.Profiler())
 }
 
 // schedulePeriodicScan schedules a periodic scan of the music library, if configured.
@@ -344,6 +357,50 @@ func startPlaybackServer(ctx context.Context) func() error {
 	}
 }
 
+// startArtworkWorker starts the background artwork acquisition worker. It always
+// runs; the queue is simply empty until something enqueues work into it.
+func startArtworkWorker(ctx context.Context, worker *artwork.Worker) func() error {
+	return func() error {
+		log.Info(ctx, "Starting artwork worker")
+		return worker.Run(ctx)
+	}
+}
+
+// scheduleArtworkHousekeeping registers the recurring missing-state and prune jobs, and
+// reports an artwork config change without acting on it.
+func scheduleArtworkHousekeeping(ctx context.Context, worker *artwork.Worker) func() error {
+	return func() error {
+		schedulerInstance := scheduler.GetInstance()
+
+		if _, err := schedulerInstance.Add(consts.ArtworkEnqueueMissingSchedule, func() {
+			if err := worker.EnqueueMissingAll(ctx); err != nil {
+				log.Error(ctx, "Error enqueueing missing artwork rechecks", err)
+			}
+		}); err != nil {
+			log.Error(ctx, "Error scheduling artwork missing-state recheck", err)
+		}
+
+		if _, err := schedulerInstance.Add(consts.ArtworkPruneSchedule, func() {
+			if err := worker.RunPrune(ctx); err != nil {
+				log.Error(ctx, "Error running artwork prune", err)
+			}
+		}); err != nil {
+			log.Error(ctx, "Error scheduling artwork prune", err)
+		}
+
+		// Also run the missing-row recheck once at startup so a never-scanned entity is picked up
+		// immediately, not only on the next hourly tick (e.g. after enabling the feature).
+		if err := worker.EnqueueMissingAll(ctx); err != nil {
+			log.Error(ctx, "Error enqueueing missing artwork rechecks", err)
+		}
+
+		if err := worker.ReconcileConfig(ctx); err != nil {
+			log.Error(ctx, "Error checking the artwork config fingerprint", err)
+		}
+		return nil
+	}
+}
+
 // startPluginManager starts the plugin manager, if configured.
 func startPluginManager(ctx context.Context) func() error {
 	return func() error {
@@ -394,7 +451,7 @@ func init() {
 	rootCmd.Flags().String("albumplaycountmode", viper.GetString("albumplaycountmode"), "how to compute playcount for albums. absolute (default) or normalized")
 	rootCmd.Flags().Bool("autoimportplaylists", viper.GetBool("autoimportplaylists"), "enable/disable .m3u playlist auto-import`")
 
-	rootCmd.Flags().Bool("prometheus.enabled", viper.GetBool("prometheus.enabled"), "enable/disable prometheus metrics endpoint`")
+	rootCmd.Flags().Bool("prometheus.enabled", viper.GetBool("prometheus.enabled"), "enable/disable prometheus metrics endpoint")
 	rootCmd.Flags().String("prometheus.metricspath", viper.GetString("prometheus.metricspath"), "http endpoint for prometheus metrics")
 
 	_ = viper.BindPFlag("address", rootCmd.Flags().Lookup("address"))

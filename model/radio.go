@@ -7,6 +7,8 @@ import (
 )
 
 type Radio struct {
+	ItemImage `structs:"-"`
+
 	ID            string    `structs:"id"              json:"id"`
 	StreamUrl     string    `structs:"stream_url"      json:"streamUrl"`
 	Name          string    `structs:"name"            json:"name"`
@@ -30,6 +32,7 @@ type RadioRepository interface {
 	ResourceRepository
 	CountAll(options ...QueryOptions) (int64, error)
 	Delete(id string) error
+	Exists(id string) (bool, error)
 	Get(id string) (*Radio, error)
 	GetAll(options ...QueryOptions) (Radios, error)
 	Put(u *Radio, colsToUpdate ...string) error

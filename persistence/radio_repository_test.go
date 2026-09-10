@@ -107,6 +107,45 @@ var _ = Describe("RadioRepository", func() {
 				Expect(err).To(BeNil())
 				Expect(all[2].StreamUrl).To(Equal("https://example.com:4533/app"))
 			})
+
+			It("enqueues artwork resolution for the saved radio", func() {
+				err := repo.Put(&model.Radio{
+					Name:      "Artwork radio",
+					StreamUrl: "https://example.com:4533/artwork",
+				})
+				Expect(err).To(BeNil())
+
+				all, err := repo.GetAll()
+				Expect(err).To(BeNil())
+				created := all[len(all)-1]
+
+				queueRepo := NewArtworkQueueRepository(context.Background(), GetDBXBuilder())
+				queued, err := queueRepo.DequeueBatch(1000)
+				Expect(err).To(BeNil())
+				Expect(queued).To(ContainElement(SatisfyAll(
+					HaveField("ItemKind", "ra"),
+					HaveField("ItemID", created.ID),
+					HaveField("Priority", model.ArtworkPriorityBump),
+				)))
+			})
+		})
+
+		Describe("Update", func() {
+			It("only writes the columns sent by the client", func() {
+				radio := radioWithHomePage
+				radio.UploadedImage = "cover.png"
+				Expect(repo.Put(&radio)).To(Succeed())
+
+				persistable := repo.(rest.Persistable)
+				Expect(persistable.Update(radio.ID, &model.Radio{Name: "Renamed"}, "name")).To(Succeed())
+
+				item, err := repo.Get(radio.ID)
+				Expect(err).To(BeNil())
+				Expect(item.Name).To(Equal("Renamed"))
+				Expect(item.UploadedImage).To(Equal("cover.png"))
+				Expect(item.StreamUrl).To(Equal(radio.StreamUrl))
+				Expect(item.HomePageUrl).To(Equal(radio.HomePageUrl))
+			})
 		})
 	})
 

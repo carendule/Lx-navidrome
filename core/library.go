@@ -192,7 +192,7 @@ func (r *libraryRepositoryWrapper) Save(entity any) (string, error) {
 	return strconv.Itoa(lib.ID), nil
 }
 
-func (r *libraryRepositoryWrapper) Update(id string, entity any, _ ...string) error {
+func (r *libraryRepositoryWrapper) Update(id string, entity any, cols ...string) error {
 	lib := entity.(*model.Library)
 	libID, err := strconv.Atoi(id)
 	if err != nil {
@@ -212,7 +212,7 @@ func (r *libraryRepositoryWrapper) Update(id string, entity any, _ ...string) er
 
 	pathChanged := originalLib.Path != lib.Path
 
-	err = r.LibraryRepository.Put(lib)
+	err = r.LibraryRepository.Put(lib, cols...)
 	if err != nil {
 		return r.mapError(err)
 	}
