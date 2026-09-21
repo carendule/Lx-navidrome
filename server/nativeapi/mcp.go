@@ -320,6 +320,59 @@ func mcpTools() []mcpTool {
 				"required": []string{"taskId"},
 			},
 		},
+		{
+			Name:        "searchSongsToDelete",
+			Description: "Search songs already in the library by title/artist keyword, to be selected for deletion.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"keyword": map[string]any{
+						"type":        "string",
+						"description": "Search keyword (song title, artist, etc).",
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Max number of results.",
+						"minimum":     1,
+						"maximum":     50,
+						"default":     10,
+					},
+				},
+				"required": []string{"keyword"},
+			},
+		},
+		{
+			Name:        "requestSongDeletion",
+			Description: "Analyze the impact (albums/playlists that would be emptied) of deleting a candidate returned by searchSongsToDelete, and return a deletionToken required by executeSongDeletion.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"sessionId": map[string]any{
+						"type":        "string",
+						"description": "Session ID returned by searchSongsToDelete.",
+					},
+					"candidateId": map[string]any{
+						"type":        "string",
+						"description": "Candidate ID chosen by the user.",
+					},
+				},
+				"required": []string{"sessionId", "candidateId"},
+			},
+		},
+		{
+			Name:        "executeSongDeletion",
+			Description: "Permanently delete a song after explicit user confirmation: removes the local file, the media_file record, and any album/playlist emptied by this deletion.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"deletionToken": map[string]any{
+						"type":        "string",
+						"description": "Deletion token returned by requestSongDeletion.",
+					},
+				},
+				"required": []string{"deletionToken"},
+			},
+		},
 	}
 }
 
@@ -341,6 +394,12 @@ func (api *Router) handleMCPToolCall(r *http.Request, params mcpToolsCallParams)
 		return api.mcpGetDownloadStatus(params.Arguments)
 	case "waitDownload":
 		return api.mcpWaitDownload(r, params.Arguments)
+	case "searchSongsToDelete":
+		return api.mcpSearchSongsToDelete(r, params.Arguments)
+	case "requestSongDeletion":
+		return api.mcpRequestSongDeletion(r, params.Arguments)
+	case "executeSongDeletion":
+		return api.mcpExecuteSongDeletion(r, params.Arguments)
 	default:
 		return nil, &mcpRPCError{Code: -32602, Message: "unknown tool", Data: params.Name}
 	}
