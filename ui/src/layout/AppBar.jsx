@@ -13,7 +13,13 @@ import {
   usePermissions,
   getResources,
 } from 'react-admin'
-import { MdInfo, MdPerson, MdSupervisorAccount, MdPublic } from 'react-icons/md'
+import {
+  MdInfo,
+  MdPerson,
+  MdPhonelink,
+  MdSupervisorAccount,
+  MdPublic,
+} from 'react-icons/md'
 import { useSelector } from 'react-redux'
 import {
   makeStyles,
@@ -27,7 +33,7 @@ import {
 import ViewListIcon from '@material-ui/icons/ViewList'
 import GetAppIcon from '@material-ui/icons/GetApp'
 import { Dialogs } from '../dialogs/Dialogs'
-import { AboutDialog } from '../dialogs'
+import { AboutDialog, QuickConnectDialog } from '../dialogs'
 import PersonalMenu from './PersonalMenu'
 import ActivityPanel from './ActivityPanel'
 import NowPlayingPanel from './NowPlayingPanel'
@@ -76,33 +82,34 @@ const emptyTaskState = {
   totalProgress: 0,
 }
 
-const AboutMenuItem = forwardRef(({ onClick, ...rest }, ref) => {
-  const classes = useStyles(rest)
-  const translate = useTranslate()
-  const [open, setOpen] = React.useState(false)
+const DialogMenuItem = forwardRef(
+  ({ onClick, label, icon, dialog, ...rest }, ref) => {
+    const classes = useStyles(rest)
+    const [open, setOpen] = React.useState(false)
 
-  const handleOpen = () => {
-    setOpen(true)
-  }
-  const handleClose = () => {
-    onClick && onClick()
-    setOpen(false)
-  }
-  const label = translate('menu.about')
-  return (
-    <>
-      <MenuItem ref={ref} onClick={handleOpen} className={classes.root}>
-        <ListItemIcon className={classes.icon}>
-          <MdInfo title={label} size={24} />
-        </ListItemIcon>
-        {label}
-      </MenuItem>
-      <AboutDialog onClose={handleClose} open={open} />
-    </>
-  )
-})
+    const handleClose = () => {
+      onClick && onClick()
+      setOpen(false)
+    }
+    return (
+      <>
+        <MenuItem
+          ref={ref}
+          onClick={() => setOpen(true)}
+          className={classes.root}
+        >
+          <ListItemIcon className={classes.icon}>
+            {createElement(icon, { title: label, size: 24 })}
+          </ListItemIcon>
+          {label}
+        </MenuItem>
+        {createElement(dialog, { onClose: handleClose, open })}
+      </>
+    )
+  },
+)
 
-AboutMenuItem.displayName = 'AboutMenuItem'
+DialogMenuItem.displayName = 'DialogMenuItem'
 
 const settingsResources = (resource) =>
   resource.name !== 'user' &&
@@ -442,6 +449,13 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
         }
       >
         <PersonalMenu sidebarIsOpen={true} onClick={onClick} />
+        {config.enableQuickConnect && (
+          <DialogMenuItem
+            label={translate('menu.quickConnect.name')}
+            icon={MdPhonelink}
+            dialog={QuickConnectDialog}
+          />
+        )}
         <Divider />
         {renderUserMenuItemLink()}
         {resources
@@ -461,7 +475,11 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
           />
         )}
         <Divider />
-        <AboutMenuItem />
+        <DialogMenuItem
+          label={translate('menu.about')}
+          icon={MdInfo}
+          dialog={AboutDialog}
+        />
       </UserMenu>
       <DownloadList
         open={downloadListOpen}
