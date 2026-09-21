@@ -51,7 +51,13 @@
         "playNext": "下一首播放",
         "info": "取得資訊",
         "showInPlaylist": "在播放清單中顯示",
-        "instantMix": "即時混音"
+        "instantMix": "即時混音",
+        "delete": "刪除",
+        "next": "下一步",
+        "executeDelete": "執行刪除"
+      },
+      "notifications": {
+        "deleted": "已刪除 %{smart_count} 首歌曲"
       }
     },
     "album": {
@@ -603,6 +609,13 @@
     "remove_missing_content": "您確定要從媒體庫中刪除所選的遺失的檔案嗎？這將永久刪除它們的所有相關資訊，包括其播放次數和評分。",
     "remove_all_missing_title": "刪除所有遺失檔案",
     "remove_all_missing_content": "您確定要從媒體庫中刪除所有遺失的檔案嗎？這將永久刪除它們的所有相關資訊，包括它們的播放次數和評分。",
+    "delete_song_title": "即将刪除 %{smart_count} 首歌曲",
+    "calculating_impact": "正在計算關聯影響",
+    "no_impact": "不會影響任何專輯或播放清單",
+    "impact_album_empty": "{{name}}專輯將同步刪除",
+    "impact_album_partial": "{{songs}}歌曲將從{{name}}專輯同步刪除",
+    "impact_playlist_empty": "{{name}}播放清單將同步刪除",
+    "impact_playlist_partial": "{{songs}}歌曲將從{{name}}播放清單同步刪除",
     "noSimilarSongsFound": "找不到相似歌曲",
     "noTopSongsFound": "找不到熱門歌曲",
     "startingInstantMix": "正在載入即時混音...",

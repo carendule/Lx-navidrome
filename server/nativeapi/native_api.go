@@ -74,7 +74,7 @@ func (api *Router) routes() http.Handler {
 		r.Use(server.JWTRefresher)
 		r.Use(server.UpdateLastAccessMiddleware(api.ds))
 		api.RX(r, "/user", api.users.NewRepository, true)
-		api.R(r, "/song", model.MediaFile{}, false)
+		api.addSongRoute(r)
 		api.R(r, "/album", model.Album{}, false)
 		api.addArtistRoute(r)
 		api.R(r, "/genre", model.Genre{}, false)
@@ -210,6 +210,20 @@ func (api *Router) addMissingFilesRoute(r chi.Router) {
 	r.Route("/missing", func(r chi.Router) {
 		api.RX(r, "/", newMissingRepository(api.ds), false)
 		r.Delete("/", deleteMissingFiles(api.maintenance))
+	})
+}
+
+func (api *Router) addSongRoute(r chi.Router) {
+	constructor := func(ctx context.Context) rest.Repository {
+		return api.ds.Resource(ctx, model.MediaFile{})
+	}
+	r.Route("/song", func(r chi.Router) {
+		r.Get("/", rest.GetAll(constructor))
+		r.Route("/{id}", func(r chi.Router) {
+			r.Use(server.URLParamsMiddleware)
+			r.Get("/", rest.Get(constructor))
+		})
+		r.Delete("/", deleteSongs(api.maintenance))
 	})
 }
 

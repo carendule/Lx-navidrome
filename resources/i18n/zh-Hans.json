@@ -51,7 +51,13 @@
         "download": "下载",
         "playNext": "下一首播放",
         "info": "查看信息",
-        "instantMix": "即兴推荐"
+        "instantMix": "即兴推荐",
+        "delete": "删除",
+        "next": "下一步",
+        "executeDelete": "执行删除"
+      },
+      "notifications": {
+        "deleted": "已删除 %{smart_count} 首歌曲"
       }
     },
     "album": {
@@ -592,6 +598,13 @@
     "remove_missing_content": "您确定要从数据库中移除选中的丢失文件吗？这将永久删除对它们的所有引用，包括播放次数和评分。",
     "remove_all_missing_title": "移除所有丢失文件",
     "remove_all_missing_content": "您确定要从数据库中移除所有丢失文件吗？这将永久删除对它们的所有引用，包括播放次数和评分。",
+    "delete_song_title": "即将删除 %{smart_count} 首歌曲",
+    "calculating_impact": "正在计算关联影响",
+    "no_impact": "不会影响任何专辑或歌单",
+    "impact_album_empty": "{{name}}专辑将同步删除",
+    "impact_album_partial": "{{songs}}歌曲将从{{name}}专辑同步删除",
+    "impact_playlist_empty": "{{name}}歌单将同步删除",
+    "impact_playlist_partial": "{{songs}}歌曲将从{{name}}歌单同步删除",
     "notifications_blocked": "您已在浏览器的设置中屏蔽了此网站的通知",
     "notifications_not_available": "此浏览器不支持桌面通知，或者您未通过 https 访问 Navidrome",
     "lastfmLinkSuccess": "Last.fm 成功关联并启用个性化记录",

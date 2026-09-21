@@ -218,6 +218,12 @@ const wrapperDataProvider = {
       ({ json }) => ({ data: json }),
     )
   },
+  deleteSongs: (ids) => {
+    const query = ids.map((id) => `id=${encodeURIComponent(id)}`).join('&')
+    return httpClient(`${REST_URL}/song?${query}`, {
+      method: 'DELETE',
+    }).then(({ json }) => ({ data: json?.ids || ids }))
+  },
   lookupQuickConnect: (code) =>
     httpClient(
       `${REST_URL}/quickconnect?code=${encodeURIComponent(code)}`,

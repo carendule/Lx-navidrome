@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"sync"
 	"time"
 
 	"github.com/Masterminds/squirrel"
+	"github.com/deluan/rest"
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
 	"github.com/navidrome/navidrome/model/request"
@@ -32,6 +34,10 @@ type Maintenance interface {
 	// RemapMissingFile moves a missing file's identity onto an existing file, the manual
 	// counterpart to the scanner's move detection (phaseMissingTracks.moveMatched).
 	RemapMissingFile(ctx context.Context, missingID, targetID string) error
+	// DeleteSongs removes the underlying files from disk and deletes the corresponding
+	// media_file records. Emptied albums/artists and orphaned playlist entries are cleaned
+	// up by the same GC pass used for missing files, so no manual cleanup is needed.
+	DeleteSongs(ctx context.Context, ids []string) error
 }
 
 type maintenanceService struct {
@@ -51,6 +57,99 @@ func (s *maintenanceService) DeleteMissingFiles(ctx context.Context, ids []strin
 
 func (s *maintenanceService) DeleteAllMissingFiles(ctx context.Context) error {
 	return s.deleteMissing(ctx, nil)
+}
+
+func (s *maintenanceService) DeleteSongs(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	user, ok := request.UserFrom(ctx)
+	if !ok || !user.IsAdmin {
+		return rest.ErrPermissionDenied
+	}
+
+	mfs := make([]*model.MediaFile, 0, len(ids))
+	for _, id := range ids {
+		mf, err := s.ds.MediaFile(ctx).Get(id)
+		if err != nil {
+			return fmt.Errorf("loading media file %q: %w", id, err)
+		}
+		mfs = append(mfs, mf)
+	}
+
+	// Track playlists containing these songs before deletion, so we can remove any that
+	// become empty as a result (unlike GC, which only purges orphaned tracks, not the
+	// playlist itself, since an empty playlist may have been intentionally created that way).
+	affectedPlaylistIDs, err := s.getAffectedPlaylistIDs(ctx, ids)
+	if err != nil {
+		log.Warn(ctx, "Error tracking affected playlists for cleanup", err)
+	}
+
+	// Remove the physical files first (best-effort: a file already gone from disk is not an error).
+	// mf.Path is library-relative, so the actual file lives at mf.AbsolutePath().
+	for _, mf := range mfs {
+		path := mf.AbsolutePath()
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			log.Error(ctx, "Error deleting file from disk", "id", mf.ID, "path", path, err)
+			return fmt.Errorf("deleting file %q: %w", path, err)
+		}
+	}
+
+	// Mark as missing so deleteMissing's underlying query (which requires missing=true) can remove them
+	if err := s.ds.MediaFile(ctx).MarkMissing(true, mfs...); err != nil {
+		return fmt.Errorf("marking files missing: %w", err)
+	}
+
+	// Reuses the missing-files pipeline: deletes the DB rows and runs GC, which purges
+	// now-empty albums/artists and removes orphaned playlist_track rows automatically.
+	if err := s.deleteMissing(ctx, ids); err != nil {
+		return err
+	}
+
+	s.purgeEmptyPlaylists(ctx, affectedPlaylistIDs)
+	return nil
+}
+
+// getAffectedPlaylistIDs returns the unique IDs of all playlists containing any of the given media files.
+func (s *maintenanceService) getAffectedPlaylistIDs(ctx context.Context, mediaFileIDs []string) ([]string, error) {
+	seen := map[string]struct{}{}
+	var ids []string
+	for _, mfID := range mediaFileIDs {
+		playlists, err := s.ds.Playlist(ctx).GetPlaylists(mfID)
+		if err != nil {
+			return ids, fmt.Errorf("getting playlists for media file %q: %w", mfID, err)
+		}
+		for _, pls := range playlists {
+			if _, ok := seen[pls.ID]; !ok {
+				seen[pls.ID] = struct{}{}
+				ids = append(ids, pls.ID)
+			}
+		}
+	}
+	return ids, nil
+}
+
+// purgeEmptyPlaylists deletes any of the given playlists that ended up with no tracks left.
+// GC only removes orphaned playlist_track rows, not the playlist itself, since a playlist may
+// have been intentionally created (or left) empty; here we know it was emptied by our own deletion.
+func (s *maintenanceService) purgeEmptyPlaylists(ctx context.Context, playlistIDs []string) {
+	for _, id := range playlistIDs {
+		pls, err := s.ds.Playlist(ctx).Get(id)
+		if err != nil {
+			if !errors.Is(err, model.ErrNotFound) {
+				log.Warn(ctx, "Error reloading playlist for cleanup", "id", id, err)
+			}
+			continue
+		}
+		if pls.SongCount > 0 {
+			continue
+		}
+		if err := s.ds.Playlist(ctx).Delete(id); err != nil {
+			log.Error(ctx, "Error deleting emptied playlist", "id", id, "name", pls.Name, err)
+			continue
+		}
+		log.Debug(ctx, "Deleted playlist emptied by song deletion", "id", id, "name", pls.Name)
+	}
 }
 
 func (s *maintenanceService) RemapMissingFile(ctx context.Context, missingID, targetID string) error {

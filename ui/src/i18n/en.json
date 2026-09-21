@@ -51,7 +51,13 @@
         "download": "Download",
         "playNext": "Play Next",
         "info": "Get Info",
-        "instantMix": "Instant Mix"
+        "instantMix": "Instant Mix",
+        "delete": "Delete",
+        "next": "Next",
+        "executeDelete": "Execute Delete"
+      },
+      "notifications": {
+        "deleted": "1 song deleted |||| %{smart_count} songs deleted"
       }
     },
     "album": {
@@ -592,6 +598,13 @@
     "remove_missing_content": "Are you sure you want to remove the selected missing files from the database? This will remove permanently any references to them, including their play counts and ratings.",
     "remove_all_missing_title": "Remove all missing files",
     "remove_all_missing_content": "Are you sure you want to remove all missing files from the database? This will permanently remove any references to them, including their play counts and ratings.",
+    "delete_song_title": "Delete 1 song |||| Delete %{smart_count} songs",
+    "calculating_impact": "Calculating related impacts",
+    "no_impact": "No albums or playlists will be affected",
+    "impact_album_empty": "{{name}} album will also be deleted",
+    "impact_album_partial": "{{songs}} will be removed from {{name}} album",
+    "impact_playlist_empty": "{{name}} playlist will also be deleted",
+    "impact_playlist_partial": "{{songs}} will be removed from {{name}} playlist",
     "notifications_blocked": "You have blocked Notifications for this site in your browser's settings",
     "notifications_not_available": "This browser does not support desktop notifications or you are not accessing Navidrome over https",
     "quickConnectApproved": "%{app} on %{device} is now signed in",
