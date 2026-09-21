@@ -36,7 +36,7 @@
 ### Stage 1: build the Go binary.
 ### Single-arch build, no xx cross-compile, no osxcross — the
 ### upstream Dockerfile uses those for multi-arch; we don't.
-FROM golang:1.26-bookworm AS build
+FROM golang:1.27-bookworm AS build
 
 # CGO is required for sqlite_fts5 and taglib. The two build
 # tags are enforced by const declarations in main.go that
