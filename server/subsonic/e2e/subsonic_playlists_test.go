@@ -19,7 +19,7 @@ var _ = Describe("Playlist Endpoints", Ordered, func() {
 		setupTestDB()
 
 		// Look up song IDs from scanned data for playlist operations
-		songs, err := ds.MediaFile(ctx).GetAll(model.QueryOptions{Sort: "title", Max: 6})
+		songs, err := ds.MediaFile().GetAll(ctx, model.QueryOptions{Sort: "title", Max: 6})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(len(songs)).To(BeNumerically(">=", 5))
 		for _, s := range songs {
@@ -244,7 +244,7 @@ var _ = Describe("Playlist Endpoints", Ordered, func() {
 		BeforeAll(func() {
 			setupTestDB()
 
-			songs, err := ds.MediaFile(ctx).GetAll(model.QueryOptions{Sort: "title", Max: 6})
+			songs, err := ds.MediaFile().GetAll(ctx, model.QueryOptions{Sort: "title", Max: 6})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(len(songs)).To(BeNumerically(">=", 3))
 			for _, s := range songs {
@@ -271,6 +271,7 @@ var _ = Describe("Playlist Endpoints", Ordered, func() {
 			resp = doReqWithUser(adminUser, "updatePlaylist",
 				"playlistId", adminPublicID, "public", "true")
 			Expect(resp.Status).To(Equal(responses.StatusOK))
+			Expect(ds.Playlist().Put(ctx, &model.Playlist{ID: adminPublicID, VisibleToUserIDs: []string{regularUser.ID}}, "visible_to_user_ids")).To(Succeed())
 		})
 
 		It("regular user creates a playlist", func() {
@@ -438,7 +439,7 @@ var _ = Describe("Playlist Endpoints", Ordered, func() {
 			setupTestDB()
 
 			// Look up a song ID for mutation tests
-			songs, err := ds.MediaFile(ctx).GetAll(model.QueryOptions{Sort: "title", Max: 1})
+			songs, err := ds.MediaFile().GetAll(ctx, model.QueryOptions{Sort: "title", Max: 1})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(songs).ToNot(BeEmpty())
 			songID = songs[0].ID
@@ -450,7 +451,7 @@ var _ = Describe("Playlist Endpoints", Ordered, func() {
 				Public:  false,
 				Rules:   &criteria.Criteria{Expression: criteria.Contains{"title": ""}},
 			}
-			Expect(ds.Playlist(ctx).Put(smartPls)).To(Succeed())
+			Expect(ds.Playlist().Put(ctx, smartPls)).To(Succeed())
 			smartPlaylistID = smartPls.ID
 		})
 
@@ -525,7 +526,7 @@ var _ = Describe("Playlist Endpoints", Ordered, func() {
 		BeforeAll(func() {
 			setupTestDB()
 
-			songs, err := ds.MediaFile(ctx).GetAll(model.QueryOptions{Sort: "title", Max: 1})
+			songs, err := ds.MediaFile().GetAll(ctx, model.QueryOptions{Sort: "title", Max: 1})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(songs).ToNot(BeEmpty())
 			songID = songs[0].ID
@@ -543,7 +544,7 @@ var _ = Describe("Playlist Endpoints", Ordered, func() {
 				OwnerID: adminUser.ID,
 				Rules:   &criteria.Criteria{Expression: criteria.All{criteria.Is{"loved": true}}},
 			}
-			Expect(ds.Playlist(ctx).Put(boolPls)).To(Succeed())
+			Expect(ds.Playlist().Put(ctx, boolPls)).To(Succeed())
 			boolPlaylistID = boolPls.ID
 
 			// Create smart playlist with string "true"
@@ -552,7 +553,7 @@ var _ = Describe("Playlist Endpoints", Ordered, func() {
 				OwnerID: adminUser.ID,
 				Rules:   &criteria.Criteria{Expression: criteria.All{criteria.Is{"loved": "true"}}},
 			}
-			Expect(ds.Playlist(ctx).Put(stringPls)).To(Succeed())
+			Expect(ds.Playlist().Put(ctx, stringPls)).To(Succeed())
 			stringPlaylistID = stringPls.ID
 
 			// Create smart playlist with string "true" in nested any group (exact issue #4826 scenario)
@@ -565,7 +566,7 @@ var _ = Describe("Playlist Endpoints", Ordered, func() {
 					},
 				}},
 			}
-			Expect(ds.Playlist(ctx).Put(nestedPls)).To(Succeed())
+			Expect(ds.Playlist().Put(ctx, nestedPls)).To(Succeed())
 			nestedPlaylistID = nestedPls.ID
 		})
 
@@ -607,7 +608,7 @@ var _ = Describe("Playlist Endpoints", Ordered, func() {
 				OwnerID: adminUser.ID,
 				Rules:   &criteria.Criteria{Expression: criteria.All{criteria.IsPresent{"genre": "true"}}},
 			}
-			Expect(ds.Playlist(ctx).Put(pls)).To(Succeed())
+			Expect(ds.Playlist().Put(ctx, pls)).To(Succeed())
 
 			resp := doReq("getPlaylist", "id", pls.ID)
 			Expect(resp.Status).To(Equal(responses.StatusOK))
@@ -620,7 +621,7 @@ var _ = Describe("Playlist Endpoints", Ordered, func() {
 				OwnerID: adminUser.ID,
 				Rules:   &criteria.Criteria{Expression: criteria.All{criteria.IsMissing{"genre": "true"}}},
 			}
-			Expect(ds.Playlist(ctx).Put(pls)).To(Succeed())
+			Expect(ds.Playlist().Put(ctx, pls)).To(Succeed())
 
 			resp := doReq("getPlaylist", "id", pls.ID)
 			Expect(resp.Status).To(Equal(responses.StatusOK))
@@ -633,14 +634,14 @@ var _ = Describe("Playlist Endpoints", Ordered, func() {
 				OwnerID: adminUser.ID,
 				Rules:   &criteria.Criteria{Expression: criteria.All{criteria.IsMissing{"genre": true}}},
 			}
-			Expect(ds.Playlist(ctx).Put(boolPls)).To(Succeed())
+			Expect(ds.Playlist().Put(ctx, boolPls)).To(Succeed())
 
 			stringPls := &model.Playlist{
 				Name:    "Genre Missing String2",
 				OwnerID: adminUser.ID,
 				Rules:   &criteria.Criteria{Expression: criteria.All{criteria.IsMissing{"genre": "true"}}},
 			}
-			Expect(ds.Playlist(ctx).Put(stringPls)).To(Succeed())
+			Expect(ds.Playlist().Put(ctx, stringPls)).To(Succeed())
 
 			boolResp := doReq("getPlaylist", "id", boolPls.ID)
 			stringResp := doReq("getPlaylist", "id", stringPls.ID)
@@ -654,19 +655,19 @@ var _ = Describe("Playlist Endpoints", Ordered, func() {
 					OwnerID: adminUser.ID,
 					Rules:   &criteria.Criteria{Expression: criteria.Contains{"title": ""}},
 				}
-				Expect(ds.Playlist(ctx).Put(allPls)).To(Succeed())
+				Expect(ds.Playlist().Put(ctx, allPls)).To(Succeed())
 				missingPls := &model.Playlist{
 					Name:    "Missing " + fieldName,
 					OwnerID: adminUser.ID,
 					Rules:   &criteria.Criteria{Expression: criteria.All{criteria.IsMissing{fieldName: true}}},
 				}
-				Expect(ds.Playlist(ctx).Put(missingPls)).To(Succeed())
+				Expect(ds.Playlist().Put(ctx, missingPls)).To(Succeed())
 				presentPls := &model.Playlist{
 					Name:    "Present " + fieldName,
 					OwnerID: adminUser.ID,
 					Rules:   &criteria.Criteria{Expression: criteria.All{criteria.IsPresent{fieldName: true}}},
 				}
-				Expect(ds.Playlist(ctx).Put(presentPls)).To(Succeed())
+				Expect(ds.Playlist().Put(ctx, presentPls)).To(Succeed())
 
 				allResp := doReq("getPlaylist", "id", allPls.ID)
 				missingResp := doReq("getPlaylist", "id", missingPls.ID)

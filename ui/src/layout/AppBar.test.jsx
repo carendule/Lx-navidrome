@@ -12,12 +12,14 @@ const onlineMocks = vi.hoisted(() => ({ httpClient: vi.fn() }))
 
 vi.mock('../dataProvider', () => ({ httpClient: onlineMocks.httpClient }))
 
+const mocks = vi.hoisted(() => ({ resources: [] }))
+
 vi.mock('react-admin', () => ({
   AppBar: ({ userMenu }) => <div data-testid="appbar">{userMenu}</div>,
+  MenuItemLink: ({ primaryText }) => <div>{primaryText}</div>,
   useTranslate: () => (x) => x,
   usePermissions: () => ({ permissions: 'admin' }),
-  getResources: () => [],
-  MenuItemLink: ({ primaryText }) => <span>{primaryText}</span>,
+  getResources: () => mocks.resources,
 }))
 
 vi.mock('./NowPlayingPanel', () => ({
@@ -49,6 +51,7 @@ describe('<AppBar />', () => {
     config.devActivityPanel = true
     config.enableNowPlaying = true
     config.enableQuickConnect = false
+    mocks.resources = []
     store = createStore(combineReducers({ activity: activityReducer }), {
       activity: { nowPlayingCount: 0 },
     })
@@ -117,5 +120,23 @@ describe('<AppBar />', () => {
     )
     expect(screen.queryAllByText('menu.quickConnect.name')).toHaveLength(0)
     expect(screen.queryAllByText('menu.about')).not.toHaveLength(0)
+  })
+
+  it('uses the resource label for settings items when set', () => {
+    mocks.resources = [
+      {
+        name: 'player',
+        hasList: true,
+        options: { subMenu: 'settings', label: 'resources.player.menuName' },
+      },
+      { name: 'transcoding', hasList: true, options: { subMenu: 'settings' } },
+    ]
+    render(
+      <Provider store={store}>
+        <AppBar />
+      </Provider>,
+    )
+    expect(screen.getByText('resources.player.menuName')).toBeInTheDocument()
+    expect(screen.getByText('resources.transcoding.name')).toBeInTheDocument()
   })
 })

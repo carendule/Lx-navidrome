@@ -71,7 +71,7 @@ func (api *Router) mcpSearchSongsToDelete(r *http.Request, args map[string]any) 
 	ctx := request.WithUser(r.Context(), model.User{IsAdmin: true})
 	username, _ := request.UsernameFrom(r.Context())
 
-	mfs, err := api.ds.MediaFile(ctx).Search(keyword, model.QueryOptions{Max: limit})
+	mfs, err := api.ds.MediaFile().Search(ctx, keyword, model.QueryOptions{Max: limit})
 	if err != nil {
 		structured := map[string]any{"reason": "search_failed", "keyword": keyword, "error": err.Error()}
 		return mcpToolErrorResult(mcpErrorText("search failed", structured, "next: retry searchSongsToDelete with a different keyword"), structured), nil
@@ -221,7 +221,7 @@ func (api *Router) mcpExecuteSongDeletion(r *http.Request, args map[string]any) 
 // computeSongDeletionImpact reports which album/playlists will be deleted (because this was
 // their last remaining song) versus just shrink by one song.
 func (api *Router) computeSongDeletionImpact(ctx context.Context, mediaFileID string) ([]map[string]any, error) {
-	mf, err := api.ds.MediaFile(ctx).Get(mediaFileID)
+	mf, err := api.ds.MediaFile().Get(ctx, mediaFileID)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +229,7 @@ func (api *Router) computeSongDeletionImpact(ctx context.Context, mediaFileID st
 	impact := make([]map[string]any, 0, 4)
 
 	if mf.AlbumID != "" {
-		album, err := api.ds.Album(ctx).Get(mf.AlbumID)
+		album, err := api.ds.Album().Get(ctx, mf.AlbumID)
 		if err != nil && !errors.Is(err, model.ErrNotFound) {
 			return nil, err
 		}
@@ -245,7 +245,7 @@ func (api *Router) computeSongDeletionImpact(ctx context.Context, mediaFileID st
 		}
 	}
 
-	playlists, err := api.ds.Playlist(ctx).GetPlaylists(mediaFileID)
+	playlists, err := api.ds.Playlist().GetPlaylists(ctx, mediaFileID)
 	if err != nil {
 		return nil, err
 	}

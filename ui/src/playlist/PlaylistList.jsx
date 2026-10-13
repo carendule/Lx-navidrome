@@ -70,15 +70,15 @@ const PlaylistFilter = (props) => {
   )
 }
 
-const ToggleAutoImport = ({ resource, source }) => {
+export const ToggleField = ({ resource, source }) => {
   const record = useRecordContext()
   const notify = useNotify()
-  const [ToggleAutoImport] = useUpdate(
+  const [toggle] = useUpdate(
     resource,
-    record.id,
+    record?.id,
     {
       ...record,
-      sync: !record.sync,
+      [source]: !record?.[source],
     },
     {
       undoable: false,
@@ -87,18 +87,27 @@ const ToggleAutoImport = ({ resource, source }) => {
       },
     },
   )
+
   const handleClick = (e) => {
-    ToggleAutoImport()
+    toggle()
     e.stopPropagation()
   }
 
-  return record.path ? (
+  if (!record) return null
+
+  return (
     <Switch
       checked={record[source]}
+      color="primary"
       onClick={handleClick}
       disabled={!isWritable(record.ownerId)}
     />
-  ) : null
+  )
+}
+
+export const ToggleAutoImport = (props) => {
+  const record = useRecordContext()
+  return record?.path ? <ToggleField {...props} /> : null
 }
 
 const PlaylistListBulkActions = (props) => {

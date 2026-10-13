@@ -70,7 +70,7 @@ func (s *maintenanceService) DeleteSongs(ctx context.Context, ids []string) erro
 
 	mfs := make([]*model.MediaFile, 0, len(ids))
 	for _, id := range ids {
-		mf, err := s.ds.MediaFile(ctx).Get(id)
+		mf, err := s.ds.MediaFile().Get(ctx, id)
 		if err != nil {
 			return fmt.Errorf("loading media file %q: %w", id, err)
 		}
@@ -96,7 +96,7 @@ func (s *maintenanceService) DeleteSongs(ctx context.Context, ids []string) erro
 	}
 
 	// Mark as missing so deleteMissing's underlying query (which requires missing=true) can remove them
-	if err := s.ds.MediaFile(ctx).MarkMissing(true, mfs...); err != nil {
+	if err := s.ds.MediaFile().MarkMissing(ctx, true, mfs...); err != nil {
 		return fmt.Errorf("marking files missing: %w", err)
 	}
 
@@ -115,7 +115,7 @@ func (s *maintenanceService) getAffectedPlaylistIDs(ctx context.Context, mediaFi
 	seen := map[string]struct{}{}
 	var ids []string
 	for _, mfID := range mediaFileIDs {
-		playlists, err := s.ds.Playlist(ctx).GetPlaylists(mfID)
+		playlists, err := s.ds.Playlist().GetPlaylists(ctx, mfID)
 		if err != nil {
 			return ids, fmt.Errorf("getting playlists for media file %q: %w", mfID, err)
 		}
@@ -134,7 +134,7 @@ func (s *maintenanceService) getAffectedPlaylistIDs(ctx context.Context, mediaFi
 // have been intentionally created (or left) empty; here we know it was emptied by our own deletion.
 func (s *maintenanceService) purgeEmptyPlaylists(ctx context.Context, playlistIDs []string) {
 	for _, id := range playlistIDs {
-		pls, err := s.ds.Playlist(ctx).Get(id)
+		pls, err := s.ds.Playlist().Get(ctx, id)
 		if err != nil {
 			if !errors.Is(err, model.ErrNotFound) {
 				log.Warn(ctx, "Error reloading playlist for cleanup", "id", id, err)
@@ -144,7 +144,7 @@ func (s *maintenanceService) purgeEmptyPlaylists(ctx context.Context, playlistID
 		if pls.SongCount > 0 {
 			continue
 		}
-		if err := s.ds.Playlist(ctx).Delete(id); err != nil {
+		if err := s.ds.Playlist().Delete(ctx, id); err != nil {
 			log.Error(ctx, "Error deleting emptied playlist", "id", id, "name", pls.Name, err)
 			continue
 		}
@@ -157,7 +157,7 @@ func (s *maintenanceService) RemapMissingFile(ctx context.Context, missingID, ta
 		return fmt.Errorf("%w: %q", ErrSameFile, missingID)
 	}
 
-	missing, err := s.ds.MediaFile(ctx).Get(missingID)
+	missing, err := s.ds.MediaFile().Get(ctx, missingID)
 	if err != nil {
 		return fmt.Errorf("loading missing file %q: %w", missingID, err)
 	}
@@ -165,7 +165,7 @@ func (s *maintenanceService) RemapMissingFile(ctx context.Context, missingID, ta
 		return fmt.Errorf("%w: %q", ErrNotMissing, missingID)
 	}
 
-	target, err := s.ds.MediaFile(ctx).GetWithParticipants(targetID)
+	target, err := s.ds.MediaFile().GetWithParticipants(ctx, targetID)
 	if err != nil {
 		return fmt.Errorf("loading target file %q: %w", targetID, err)
 	}
@@ -181,27 +181,27 @@ func (s *maintenanceService) RemapMissingFile(ctx context.Context, missingID, ta
 		// Preserve the original created_at so the remapped track doesn't resurface in "Recently Added"
 		target.CreatedAt = missing.CreatedAt
 		target.ID = missing.ID
-		if err := tx.MediaFile(ctx).Put(target); err != nil {
+		if err := tx.MediaFile().Put(ctx, target); err != nil {
 			return fmt.Errorf("update matched track: %w", err)
 		}
 		// Unlike the scanner's freshly-imported target, this one may carry history of its own
-		if err := tx.MediaFile(ctx).ReassignReferences(discardedID, missing.ID); err != nil {
+		if err := tx.MediaFile().ReassignReferences(ctx, discardedID, missing.ID); err != nil {
 			return fmt.Errorf("reassign target references: %w", err)
 		}
-		if err := tx.MediaFile(ctx).Delete(discardedID); err != nil {
+		if err := tx.MediaFile().Delete(ctx, discardedID); err != nil {
 			return fmt.Errorf("delete discarded track: %w", err)
 		}
 
 		if oldAlbumID != newAlbumID {
-			oldAlbumTracks, err := tx.MediaFile(ctx).CountAll(model.QueryOptions{Filters: squirrel.Eq{"album_id": oldAlbumID}})
+			oldAlbumTracks, err := tx.MediaFile().CountAll(ctx, model.QueryOptions{Filters: squirrel.Eq{"album_id": oldAlbumID}})
 			if err != nil {
 				return fmt.Errorf("get old album tracks: %w", err)
 			}
 			if oldAlbumTracks == 0 {
-				if err := tx.Album(ctx).ReassignAnnotation(oldAlbumID, newAlbumID); err != nil {
+				if err := tx.Album().ReassignAnnotation(ctx, oldAlbumID, newAlbumID); err != nil {
 					return fmt.Errorf("reassign album annotations: %w", err)
 				}
-				if err := tx.Album(ctx).CopyAttributes(oldAlbumID, newAlbumID, "created_at"); err != nil && !errors.Is(err, model.ErrNotFound) {
+				if err := tx.Album().CopyAttributes(ctx, oldAlbumID, newAlbumID, "created_at"); err != nil && !errors.Is(err, model.ErrNotFound) {
 					return fmt.Errorf("copy album attributes: %w", err)
 				}
 			}
@@ -220,7 +220,7 @@ func (s *maintenanceService) RemapMissingFile(ctx context.Context, missingID, ta
 
 	// Stats are refreshed synchronously, unlike deleteMissing, so the CLI sees them before it exits.
 	// album/artist play count aggregates are not recalculated here; they are refreshed by the next scan.
-	if _, err := s.ds.Artist(ctx).RefreshStats(true); err != nil {
+	if _, err := s.ds.Artist().RefreshStats(ctx, true); err != nil {
 		log.Error(ctx, "Error refreshing artist stats after remapping missing file", err)
 	}
 	affectedAlbumIDs := []string{newAlbumID}
@@ -245,10 +245,10 @@ func (s *maintenanceService) deleteMissing(ctx context.Context, ids []string) er
 	// Delete missing files within a transaction
 	err = s.ds.WithTx(func(tx model.DataStore) error {
 		if len(ids) == 0 {
-			_, err := tx.MediaFile(ctx).DeleteAllMissing()
+			_, err := tx.MediaFile().DeleteAllMissing(ctx)
 			return err
 		}
-		return tx.MediaFile(ctx).DeleteMissing(ids)
+		return tx.MediaFile().DeleteMissing(ctx, ids)
 	})
 	if err != nil {
 		log.Error(ctx, "Error deleting missing tracks from DB", "ids", ids, err)
@@ -291,11 +291,11 @@ func (s *maintenanceService) refreshAlbums(ctx context.Context, albumIDs []strin
 
 // refreshAlbumChunk processes a single chunk of album IDs
 func (s *maintenanceService) refreshAlbumChunk(ctx context.Context, albumIDs []string) error {
-	albumRepo := s.ds.Album(ctx)
-	mfRepo := s.ds.MediaFile(ctx)
+	albumRepo := s.ds.Album()
+	mfRepo := s.ds.MediaFile()
 
 	// Batch load existing albums
-	albums, err := albumRepo.GetAll(model.QueryOptions{
+	albums, err := albumRepo.GetAll(ctx, model.QueryOptions{
 		Filters: squirrel.Eq{"album.id": albumIDs},
 	})
 	if err != nil {
@@ -309,7 +309,7 @@ func (s *maintenanceService) refreshAlbumChunk(ctx context.Context, albumIDs []s
 	}
 
 	// Batch load all media files for these albums
-	mediaFiles, err := mfRepo.GetAll(model.QueryOptions{
+	mediaFiles, err := mfRepo.GetAll(ctx, model.QueryOptions{
 		Filters: squirrel.Eq{"album_id": albumIDs},
 		Sort:    "album_id, path",
 	})
@@ -342,7 +342,7 @@ func (s *maintenanceService) refreshAlbumChunk(ctx context.Context, albumIDs []s
 			newAlbum.UpdatedAt = time.Now()
 			newAlbum.CreatedAt = oldAlbum.CreatedAt
 
-			if err := albumRepo.Put(&newAlbum); err != nil {
+			if err := albumRepo.Put(ctx, &newAlbum); err != nil {
 				log.Error(ctx, "Error updating album during refresh", "albumID", albumID, err)
 				// Continue with other albums instead of failing entirely
 				continue
@@ -364,7 +364,7 @@ func (s *maintenanceService) getAffectedAlbumIDs(ctx context.Context, ids []stri
 		}
 	}
 
-	mfs, err := s.ds.MediaFile(ctx).GetAll(model.QueryOptions{
+	mfs, err := s.ds.MediaFile().GetAll(ctx, model.QueryOptions{
 		Filters: filters,
 	})
 	if err != nil {
@@ -392,7 +392,7 @@ func (s *maintenanceService) refreshStatsAsync(ctx context.Context, affectedAlbu
 	// Refresh artist stats in background
 	s.wg.Go(func() {
 		bgCtx := request.AddValues(context.Background(), ctx)
-		if _, err := s.ds.Artist(bgCtx).RefreshStats(true); err != nil {
+		if _, err := s.ds.Artist().RefreshStats(bgCtx, true); err != nil {
 			log.Error(bgCtx, "Error refreshing artist stats after deleting missing files", err)
 		} else {
 			log.Debug(bgCtx, "Successfully refreshed artist stats after deleting missing files")

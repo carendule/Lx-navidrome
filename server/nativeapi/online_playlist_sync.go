@@ -1071,10 +1071,10 @@ func addMediaToPlaylist(user model.User, playlistID string, mediaID string) erro
 	if user.ID != "" {
 		ctx = request.WithUser(ctx, user)
 	}
-	playlistRepo := playlistSyncDataStore.Playlist(ctx)
+	playlistRepo := playlistSyncDataStore.Playlist()
 	log.Debug(nil, "addMediaToPlaylist: got playlist repo", "playlistId", playlistID)
 
-	pls, err := playlistRepo.GetWithTracks(playlistID, false, true)
+	pls, err := playlistRepo.GetWithTracks(ctx, playlistID, false, true)
 	if err != nil {
 		log.Error(nil, "addMediaToPlaylist: GetWithTracks failed", "error", err, "playlistId", playlistID, "userId", user.ID)
 		return err
@@ -1083,7 +1083,7 @@ func addMediaToPlaylist(user model.User, playlistID string, mediaID string) erro
 	log.Debug(nil, "addMediaToPlaylist: got playlist", "playlistId", playlistID, "songCount", pls.SongCount)
 
 	pls.AddMediaFilesByID([]string{mediaID})
-	if err := playlistRepo.Put(pls); err != nil {
+	if err := playlistRepo.Put(ctx, pls); err != nil {
 		log.Error(nil, "addMediaToPlaylist: Put failed", "error", err, "playlistId", playlistID, "mediaId", mediaID, "userId", user.ID)
 		return err
 	}
@@ -1116,7 +1116,7 @@ func findMatchingLibraryMediaID(user model.User, song map[string]any) (string, b
 	query := strings.TrimSpace(strings.Join([]string{name, singer}, " "))
 	log.Debug(nil, "Playlist sync searching library for matching song", "query", query, "songName", name, "songSinger", singer, "durationSec", durationSec)
 
-	candidates, err := playlistSyncDataStore.MediaFile(ctx).Search(query, model.QueryOptions{Max: 20})
+	candidates, err := playlistSyncDataStore.MediaFile().Search(ctx, query, model.QueryOptions{Max: 20})
 	if err != nil {
 		log.Error(nil, "Playlist sync library search error (first attempt)", "query", query, "error", err)
 		return "", false, err
@@ -1125,7 +1125,7 @@ func findMatchingLibraryMediaID(user model.User, song map[string]any) (string, b
 
 	if len(candidates) == 0 && singer != "" {
 		log.Debug(nil, "Playlist sync retrying search without singer", "songName", name)
-		candidates, err = playlistSyncDataStore.MediaFile(ctx).Search(name, model.QueryOptions{Max: 20})
+		candidates, err = playlistSyncDataStore.MediaFile().Search(ctx, name, model.QueryOptions{Max: 20})
 		if err != nil {
 			log.Error(nil, "Playlist sync library search error (second attempt)", "songName", name, "error", err)
 			return "", false, err

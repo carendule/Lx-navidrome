@@ -47,6 +47,13 @@ Lx-Navidrome 是一个基于 [Navidrome](https://github.com/navidrome/navidrome)
 Agent提示词模板请参考 [MCP_AGENT_PROMPT](https://github.com/carendule/Lx-navidrome/blob/develop/MCP_AGENT_PROMPT.md)
 ---
 
+Several cloud hosting providers partner with us to offer [officially supported, cloud-hosted solutions](https://www.navidrome.org/docs/installation/managed). If you sign up with any of these providers, a share of the revenue funds the development of Navidrome at no additional cost for you.
+
+<a href="https://www.pikapods.com/pods?run=navidrome"><img src="resources/hosting/pikapods.svg" alt="Run on PikaPods" width="200" height="40"></a>
+<br>
+<a href="https://zenith.hosting/host/navidrome?ref=navidrome"><img src="resources/hosting/zenith.svg" alt="Deploy with Zenith" width="200" height="40"></a>
+<br>
+<a href="https://store.elfhosted.com/product/navidrome/"><img src="resources/hosting/elfhosted.svg" alt="Deploy on ElfHosted" width="200" height="40"></a>
 ## 🚀 安装
 
 ### Docker（推荐）

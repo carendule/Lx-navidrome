@@ -44,10 +44,10 @@ var _ = Describe("Multi-Library Support", Ordered, func() {
 
 		// Create the second library in the DB (Put auto-assigns admin users)
 		lib2 = model.Library{ID: 2, Name: "Classical Library", Path: "fake2:///classical"}
-		Expect(ds.Library(ctx).Put(&lib2)).To(Succeed())
+		Expect(ds.Library().Put(ctx, &lib2)).To(Succeed())
 
 		// Reload admin user to get both libraries in the Libraries field
-		loadedAdmin, err := ds.User(ctx).FindByUsername(adminUser.UserName)
+		loadedAdmin, err := ds.User().FindByUsername(ctx, adminUser.UserName)
 		Expect(err).ToNot(HaveOccurred())
 		adminWithLibs = *loadedAdmin
 
@@ -65,10 +65,10 @@ var _ = Describe("Multi-Library Support", Ordered, func() {
 			IsAdmin:     false,
 			NewPassword: "password",
 		}
-		Expect(ds.User(ctx).Put(&userLib1Only)).To(Succeed())
-		Expect(ds.User(ctx).SetUserLibraries(userLib1Only.ID, []int{lib.ID})).To(Succeed())
+		Expect(ds.User().Put(ctx, &userLib1Only)).To(Succeed())
+		Expect(ds.User().SetUserLibraries(ctx, userLib1Only.ID, []int{lib.ID})).To(Succeed())
 
-		loadedUser, err := ds.User(ctx).FindByUsername(userLib1Only.UserName)
+		loadedUser, err := ds.User().FindByUsername(ctx, userLib1Only.UserName)
 		Expect(err).ToNot(HaveOccurred())
 		userLib1Only.Libraries = loadedUser.Libraries
 	})
@@ -181,7 +181,7 @@ var _ = Describe("Multi-Library Support", Ordered, func() {
 
 		BeforeAll(func() {
 			// Look up one song from each library
-			lib1Songs, err := ds.MediaFile(ctx).GetAll(model.QueryOptions{
+			lib1Songs, err := ds.MediaFile().GetAll(ctx, model.QueryOptions{
 				Filters: squirrel.Eq{"media_file.library_id": lib.ID},
 				Max:     1, Sort: "title",
 			})
@@ -189,7 +189,7 @@ var _ = Describe("Multi-Library Support", Ordered, func() {
 			Expect(lib1Songs).ToNot(BeEmpty())
 			lib1SongID = lib1Songs[0].ID
 
-			lib2Songs, err := ds.MediaFile(ctx).GetAll(model.QueryOptions{
+			lib2Songs, err := ds.MediaFile().GetAll(ctx, model.QueryOptions{
 				Filters: squirrel.Eq{"media_file.library_id": lib2.ID},
 				Max:     1, Sort: "title",
 			})
@@ -209,11 +209,12 @@ var _ = Describe("Multi-Library Support", Ordered, func() {
 			playlistID = resp.Playlist.Id
 		})
 
-		It("admin makes the playlist public", func() {
+		It("admin shares the playlist with the restricted user", func() {
 			resp := doReqWithUser(adminWithLibs, "updatePlaylist",
 				"playlistId", playlistID, "public", "true")
 
 			Expect(resp.Status).To(Equal(responses.StatusOK))
+			Expect(ds.Playlist().Put(ctx, &model.Playlist{ID: playlistID, VisibleToUserIDs: []string{userLib1Only.ID}}, "visible_to_user_ids")).To(Succeed())
 		})
 
 		It("non-admin user with lib1 only sees only lib1 tracks in the playlist", func() {
@@ -248,7 +249,7 @@ var _ = Describe("Multi-Library Support", Ordered, func() {
 		var lib2AlbumID string
 
 		BeforeAll(func() {
-			lib2Albums, err := ds.Album(ctx).GetAll(model.QueryOptions{
+			lib2Albums, err := ds.Album().GetAll(ctx, model.QueryOptions{
 				Filters: squirrel.Eq{"album.library_id": lib2.ID},
 			})
 			Expect(err).ToNot(HaveOccurred())

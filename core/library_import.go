@@ -19,7 +19,7 @@ func (s *libraryService) ImportMediaFile(ctx context.Context, filePath string, l
 	if s == nil || s.ds == nil {
 		return "", fmt.Errorf("library service is not configured")
 	}
-	if s.scanner == nil {
+	if s.repo == nil || s.repo.scanner == nil {
 		return "", fmt.Errorf("scanner is not configured")
 	}
 
@@ -29,7 +29,7 @@ func (s *libraryService) ImportMediaFile(ctx context.Context, filePath string, l
 	}
 	sourcePath = filepath.Clean(sourcePath)
 
-	libs, err := s.ds.Library(ctx).GetAll()
+	libs, err := s.ds.Library().GetAll(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -48,7 +48,7 @@ func (s *libraryService) ImportMediaFile(ctx context.Context, filePath string, l
 	}
 
 	lookupPath := fmt.Sprintf("%d:%s", lib.ID, filepath.ToSlash(relativeFilePath))
-	if mediaFiles, lookupErr := s.ds.MediaFile(ctx).FindByPaths([]string{lookupPath}); lookupErr != nil {
+	if mediaFiles, lookupErr := s.ds.MediaFile().FindByPaths(ctx, []string{lookupPath}); lookupErr != nil {
 		return "", lookupErr
 	} else if len(mediaFiles) > 0 {
 		return mediaFiles[0].ID, nil
@@ -60,11 +60,11 @@ func (s *libraryService) ImportMediaFile(ctx context.Context, filePath string, l
 		}
 	}
 
-	if _, scanErr := s.scanner.ScanFolders(ctx, false, []model.ScanTarget{{LibraryID: lib.ID, FolderPath: scanFolderPath}}); scanErr != nil {
+	if _, scanErr := s.repo.scanner.ScanFolders(ctx, false, []model.ScanTarget{{LibraryID: lib.ID, FolderPath: scanFolderPath}}); scanErr != nil {
 		return "", scanErr
 	}
 
-	mediaFiles, lookupErr := s.ds.MediaFile(ctx).FindByPaths([]string{lookupPath})
+	mediaFiles, lookupErr := s.ds.MediaFile().FindByPaths(ctx, []string{lookupPath})
 	if lookupErr != nil {
 		return "", lookupErr
 	}

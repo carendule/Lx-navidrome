@@ -3,7 +3,6 @@ import {
   FormDataConsumer,
   SimpleForm,
   TextInput,
-  TextField,
   BooleanInput,
   required,
   useTranslate,
@@ -11,14 +10,15 @@ import {
   ReferenceInput,
   SelectInput,
 } from 'react-admin'
-import { Title } from '../common'
+import { ReadOnlyTextField, Title } from '../common'
 import PlaylistVisibilityInput from './PlaylistVisibilityInput'
 
 const SyncFragment = ({ formData, variant, ...rest }) => {
+  if (!formData.path) return null
   return (
     <>
-      {formData.path && <BooleanInput source="sync" {...rest} />}
-      {formData.path && <TextField source="path" {...rest} />}
+      <BooleanInput source="sync" {...rest} />
+      <ReadOnlyTextField source="path" {...rest} />
     </>
   )
 }
@@ -57,10 +57,10 @@ const PlaylistEditForm = (props) => {
           />
         </ReferenceInput>
       ) : (
-        <TextField source="ownerName" />
+        <ReadOnlyTextField source="ownerName" />
       )}
       <PlaylistVisibilityInput />
-      <FormDataConsumer>
+      <FormDataConsumer fullWidth>
         {(formDataProps) => <SyncFragment {...formDataProps} />}
       </FormDataConsumer>
     </SimpleForm>
