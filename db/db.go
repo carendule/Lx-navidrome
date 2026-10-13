@@ -104,7 +104,7 @@ func Init(ctx context.Context) func() {
 		log.Info(ctx, "Upgrading DB Schema to latest version")
 	}
 	goose.SetLogger(&logAdapter{ctx: ctx, silent: schemaEmpty})
-	err = goose.UpContext(ctx, db, migrationsFolder)
+	err = applyMigrations(ctx, db)
 	if err != nil {
 		log.Fatal(ctx, "Failed to apply new migrations", err)
 	}
@@ -120,6 +120,10 @@ func Init(ctx context.Context) func() {
 	return func() {
 		Close(ctx)
 	}
+}
+
+func applyMigrations(ctx context.Context, database *sql.DB) error {
+	return goose.UpContext(ctx, database, migrationsFolder, goose.WithAllowMissing())
 }
 
 // ErrorCodes reports the SQLite result code and extended result code carried by err.

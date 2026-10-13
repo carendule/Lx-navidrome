@@ -7,6 +7,7 @@ var (
 	FTSTriggerSuffixes   = ftsTriggerSuffixes
 	FTSSearchMigration   = ftsSearchMigration
 	IsSchemaEmpty        = isSchemaEmpty
+	ApplyMigrations      = applyMigrations
 	BackupPath           = backupPath
 	OptimizeDBAt         = optimizeAt
 	OptimizeDBIfNeeded   = optimizeIfNeeded
