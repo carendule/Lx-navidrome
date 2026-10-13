@@ -295,6 +295,10 @@ func (r *userRepository) Update(id string, entity any, _ ...string) error {
 		}
 		u.IsAdmin = false
 		u.UserName = usr.UserName
+		u.OnlineSearchEnabled = usr.OnlineSearchEnabled
+		u.OnlineBrowserDownloadEnabled = usr.OnlineBrowserDownloadEnabled
+		u.OnlineServerDownloadEnabled = usr.OnlineServerDownloadEnabled
+		u.OnlinePlaylistSyncEnabled = usr.OnlinePlaylistSyncEnabled
 	}
 
 	// Decrypt the user's existing password before validating. This is required otherwise the existing password entered by the user will never match.

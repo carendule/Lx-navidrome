@@ -28,6 +28,7 @@ type Playlist struct {
 	OwnerName        string         `structs:"-" json:"ownerName"`
 	OwnerID          string         `structs:"owner_id" json:"ownerId"`
 	Public           bool           `structs:"public" json:"public"`
+	VisibleToUserIDs []string       `structs:"-" json:"visibleToUserIds"`
 	Tracks           PlaylistTracks `structs:"-" json:"tracks,omitempty"`
 	Path             string         `structs:"path" json:"path"`
 	Sync             bool           `structs:"sync" json:"sync"`

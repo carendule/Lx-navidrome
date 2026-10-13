@@ -1262,7 +1262,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                                         color="primary"
                                         className={classes.detailSyncBtn}
                                         onClick={handleStartPlaylistSync}
-                                        disabled={syncButtonLoading}
+                                        disabled={syncButtonLoading || !onCreatePlaylistSyncTask}
                                     >
                                         <SyncIcon />
                                         {translate('online.playlist.syncToNavidrome', { _: 'Sync to Navidrome' })}
@@ -1391,6 +1391,7 @@ const OnlinePlaylistSearch = ({ active = true, onOpenDownloadDialog, onCreatePla
                                                         <IconButton
                                                             size="small"
                                                             className={classes.detailDownloadBtn}
+                                                            disabled={!onOpenDownloadDialog}
                                                             onClick={() =>
                                                                 onOpenDownloadDialog && onOpenDownloadDialog(song)
                                                             }

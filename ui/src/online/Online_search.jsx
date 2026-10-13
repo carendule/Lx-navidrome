@@ -410,6 +410,26 @@ const OnlineSearch = () => {
   const [serverDownloadLoading, setServerDownloadLoading] = useState(false)
   const [serverDownloadStatus, setServerDownloadStatus] = useState('idle')
   const [playlistSyncTasks, setPlaylistSyncTasks] = useState([])
+  const [onlinePermissions, setOnlinePermissions] = useState(null)
+
+  useEffect(() => {
+    let active = true
+    const refreshPermissions = () => {
+      httpClient('/api/online/source/status')
+        .then(({ json }) => {
+          if (active) setOnlinePermissions(json.permissions || {})
+        })
+        .catch(() => {
+          if (active) setOnlinePermissions({})
+        })
+    }
+    refreshPermissions()
+    window.addEventListener('focus', refreshPermissions)
+    return () => {
+      active = false
+      window.removeEventListener('focus', refreshPermissions)
+    }
+  }, [])
 
   useEffect(() => {
     if (viewMode === VIEW_MODES.playlist) {
@@ -674,6 +694,7 @@ const OnlineSearch = () => {
   // No need to emit; AppBar polls and broadcasts for both download and sync tasks
 
   useEffect(() => {
+    if (!onlinePermissions?.sync) return undefined
     let mounted = true
     // Fetch sync tasks once on mount to restore any in-progress tasks
     httpClient('/api/online/playlist/sync/tasks')
@@ -691,7 +712,7 @@ const OnlineSearch = () => {
     return () => {
       mounted = false
     }
-  }, [])
+  }, [onlinePermissions?.sync])
 
   // Listen for AppBar's sync task updates to avoid duplicate polling
   useEffect(() => {
@@ -903,6 +924,11 @@ const OnlineSearch = () => {
     }
   }, [handleCloseDownloadDialog, notify, selectedItem, selectedQuality])
 
+  if (!onlinePermissions) return <CircularProgress />
+  if (!onlinePermissions.search) {
+    return <Typography color="error">{translate('online.error.permission_denied', { _: 'You do not have permission to use online search.' })}</Typography>
+  }
+
   return (
     <div className={classes.root}>
       <Title
@@ -951,7 +977,7 @@ const OnlineSearch = () => {
       <div style={{ display: viewMode === VIEW_MODES.song ? 'block' : 'none' }}>
         <OnlineSongSearch
           limit={20}
-          onOpenDownloadDialog={handleOpenDownloadDialog}
+          onOpenDownloadDialog={onlinePermissions?.browser || onlinePermissions?.server ? handleOpenDownloadDialog : undefined}
         />
       </div>
 
@@ -960,8 +986,8 @@ const OnlineSearch = () => {
         <div style={{ display: viewMode === VIEW_MODES.playlist ? 'block' : 'none' }}>
           <OnlinePlaylistSearch
             active={viewMode === VIEW_MODES.playlist}
-            onOpenDownloadDialog={handleOpenDownloadDialog}
-            onCreatePlaylistSyncTask={handleCreatePlaylistSyncTask}
+            onOpenDownloadDialog={onlinePermissions?.browser || onlinePermissions?.server ? handleOpenDownloadDialog : undefined}
+            onCreatePlaylistSyncTask={onlinePermissions?.sync ? handleCreatePlaylistSyncTask : undefined}
           />
         </div>
       )}
@@ -1028,7 +1054,7 @@ const OnlineSearch = () => {
               variant="outlined"
               className={classes.downloadOptionBtn}
               onClick={handleBrowserDownload}
-              disabled={browserDownloadLoading}
+              disabled={browserDownloadLoading || !onlinePermissions?.browser}
               endIcon={
                 browserDownloadLoading ? <CircularProgress size={16} /> : null
               }
@@ -1054,7 +1080,7 @@ const OnlineSearch = () => {
               variant="outlined"
               className={classes.downloadOptionBtn}
               onClick={handleServerDownload}
-              disabled={serverDownloadLoading}
+              disabled={serverDownloadLoading || !onlinePermissions?.server}
               endIcon={
                 serverDownloadLoading ? <CircularProgress size={16} /> : null
               }

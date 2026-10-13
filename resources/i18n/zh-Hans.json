@@ -152,6 +152,10 @@
       "fields": {
         "userName": "用户名",
         "isAdmin": "是否为管理员",
+        "onlineSearchEnabled": "允许在线搜索",
+        "onlineBrowserDownloadEnabled": "允许在线下载到浏览器",
+        "onlineServerDownloadEnabled": "允许在线下载到服务器",
+        "onlinePlaylistSyncEnabled": "允许同步在线歌单",
         "lastLoginAt": "上次登录",
         "lastAccessAt": "上次访问",
         "updatedAt": "更新于",
@@ -218,6 +222,7 @@
         "duration": "时长",
         "ownerName": "所有者",
         "public": "公开",
+        "visibleToUserIds": "可查看此歌单的用户",
         "updatedAt": "更新于",
         "createdAt": "创建于",
         "songCount": "歌曲数",
@@ -850,6 +855,7 @@
     },
     "error": {
       "unknown": "未知错误",
+      "permission_denied": "您没有使用在线搜索的权限。",
       "embed_metadata_failed": "元数据嵌入失败",
       "embed_lyric_failed": "歌词嵌入失败",
       "no_available_source": "无可用解析源",

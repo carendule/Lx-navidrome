@@ -766,6 +766,7 @@ const OnlineSongSearch = ({
                                                 <IconButton
                                                     size="small"
                                                     className={classes.downloadBtn}
+                                                    disabled={!onOpenDownloadDialog}
                                                     onClick={() => onOpenDownloadDialog(item)}
                                                     aria-label={translate('online.download.action', { _: 'Download' })}
                                                     title={translate('online.download.action', { _: 'Download' })}

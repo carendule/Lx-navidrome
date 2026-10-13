@@ -3,7 +3,6 @@ import {
   Create,
   SimpleForm,
   TextInput,
-  BooleanInput,
   required,
   useTranslate,
   useRefresh,
@@ -11,6 +10,7 @@ import {
   useRedirect,
 } from 'react-admin'
 import { Title } from '../common'
+import PlaylistVisibilityInput from './PlaylistVisibilityInput'
 
 const PlaylistCreate = (props) => {
   const { basePath } = props
@@ -34,7 +34,7 @@ const PlaylistCreate = (props) => {
       <SimpleForm redirect="list" variant={'outlined'}>
         <TextInput source="name" validate={required()} />
         <TextInput multiline source="comment" />
-        <BooleanInput source="public" initialValue={true} />
+        <PlaylistVisibilityInput />
       </SimpleForm>
     </Create>
   )

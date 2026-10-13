@@ -152,6 +152,10 @@
       "fields": {
         "userName": "Username",
         "isAdmin": "Is Admin",
+        "onlineSearchEnabled": "Online search",
+        "onlineBrowserDownloadEnabled": "Online downloads to browser",
+        "onlineServerDownloadEnabled": "Online downloads to server",
+        "onlinePlaylistSyncEnabled": "Online playlist sync",
         "lastLoginAt": "Last Login",
         "lastAccessAt": "Last Access",
         "updatedAt": "Updated at",
@@ -218,6 +222,7 @@
         "duration": "Duration",
         "ownerName": "Owner",
         "public": "Public",
+        "visibleToUserIds": "Visible to users",
         "updatedAt": "Updated at",
         "createdAt": "Created at",
         "songCount": "Songs",
@@ -861,6 +866,7 @@
     },
     "error": {
       "unknown": "Unknown error",
+      "permission_denied": "You do not have permission to use online search.",
       "embed_metadata_failed": "Metadata embedding failed",
       "embed_lyric_failed": "Lyric embedding failed",
       "no_available_source": "No available source",

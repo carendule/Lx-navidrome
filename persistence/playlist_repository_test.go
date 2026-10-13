@@ -60,6 +60,26 @@ var _ = Describe("PlaylistRepository", func() {
 	})
 
 	Describe("Count", func() {
+		It("only exposes playlists to selected users, owners and admins", func() {
+			pls := model.Playlist{Name: "Selected users", OwnerID: "userid", VisibleToUserIDs: []string{"selected"}}
+			Expect(repo.Put(&pls)).To(Succeed())
+			DeferCleanup(func() { Expect(repo.Delete(pls.ID)).To(Succeed()) })
+			for _, userID := range []string{"selected", "userid"} {
+				ctx := request.WithUser(GinkgoT().Context(), model.User{ID: userID})
+				visible, err := NewPlaylistRepository(ctx, GetDBXBuilder()).Get(pls.ID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(visible.VisibleToUserIDs).To(Equal([]string{"selected"}))
+			}
+			ctx := request.WithUser(GinkgoT().Context(), model.User{ID: "unselected"})
+			_, err := NewPlaylistRepository(ctx, GetDBXBuilder()).Get(pls.ID)
+			Expect(err).To(MatchError(model.ErrNotFound))
+			pls.VisibleToUserIDs = nil
+			Expect(repo.Put(&pls, "visible_to_user_ids")).To(Succeed())
+			ctx = request.WithUser(GinkgoT().Context(), model.User{ID: "selected"})
+			_, err = NewPlaylistRepository(ctx, GetDBXBuilder()).Get(pls.ID)
+			Expect(err).To(MatchError(model.ErrNotFound))
+		})
+
 		It("returns the number of playlists in the DB", func() {
 			Expect(repo.CountAll()).To(Equal(int64(2)))
 		})

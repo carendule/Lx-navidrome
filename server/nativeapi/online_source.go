@@ -19,6 +19,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/log"
+	"github.com/navidrome/navidrome/model/request"
 	"github.com/navidrome/navidrome/server"
 )
 
@@ -244,11 +245,18 @@ func (api *Router) onlineSourceStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	user, _ := request.UserFrom(r.Context())
 	writeJSON(w, map[string]any{
 		"hasSources":         len(sources) > 0,
-		"hasEnabledSource":   enabledCount > 0,
+		"hasEnabledSource":   enabledCount > 0 && onlinePermissionAllowed(user, "search"),
 		"enabledSourceCount": enabledCount,
 		"totalSourceCount":   len(sources),
+		"permissions": map[string]bool{
+			"search":  onlinePermissionAllowed(user, "search"),
+			"browser": onlinePermissionAllowed(user, "browser"),
+			"server":  onlinePermissionAllowed(user, "server"),
+			"sync":    onlinePermissionAllowed(user, "sync"),
+		},
 	})
 }
 

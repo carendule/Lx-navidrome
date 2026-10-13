@@ -152,6 +152,10 @@
       "fields": {
         "userName": "使用者名稱",
         "isAdmin": "管理員",
+        "onlineSearchEnabled": "允許線上搜尋",
+        "onlineBrowserDownloadEnabled": "允許線上下載至瀏覽器",
+        "onlineServerDownloadEnabled": "允許線上下載至伺服器",
+        "onlinePlaylistSyncEnabled": "允許同步線上播放清單",
         "lastLoginAt": "上次登入",
         "updatedAt": "更新於",
         "name": "名稱",
@@ -218,6 +222,7 @@
         "duration": "長度",
         "ownerName": "擁有者",
         "public": "公開",
+        "visibleToUserIds": "可檢視此播放清單的使用者",
         "updatedAt": "更新於",
         "createdAt": "建立於",
         "songCount": "歌曲數",
@@ -700,6 +705,7 @@
     "mcpWikiFlow": "基本流程：initialize -> tools/list -> tools/call(searchSongs) -> tools/call(startDownload) -> tools/call(getDownloadStatus 或 waitDownload)。",
     "mcpWikiTools": "可用工具：ping、searchSongs、startDownload、getDownloadStatus、waitDownload。",
     "error": {
+      "permission_denied": "您沒有使用線上搜尋的權限。",
       "song_already_exists_in_library": "歌曲已存在於媒體庫中"
     },
     "close": "關閉",

@@ -65,7 +65,6 @@ func (api *Router) routes() http.Handler {
 
 	// Public
 	api.RX(r, "/translation", newTranslationRepository, false)
-	api.addOnlineSearchRoutes(r)
 	api.addMCPRoute(r)
 
 	// Protected
@@ -73,6 +72,7 @@ func (api *Router) routes() http.Handler {
 		r.Use(server.Authenticator(api.ds))
 		r.Use(server.JWTRefresher)
 		r.Use(server.UpdateLastAccessMiddleware(api.ds))
+		r.With(requireOnlinePermission("search")).Group(api.addOnlineSearchRoutes)
 		api.RX(r, "/user", api.users.NewRepository, true)
 		api.addSongRoute(r)
 		api.R(r, "/album", model.Album{}, false)

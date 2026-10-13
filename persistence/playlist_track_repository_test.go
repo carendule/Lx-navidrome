@@ -244,7 +244,7 @@ var _ = Describe("PlaylistTrackRepository", func() {
 			DeferCleanup(func() { _ = adminMr.Delete("pls-otherlib-track") })
 
 			adminPls := NewPlaylistRepository(adminCtx, db)
-			pls := model.Playlist{Name: "Public Mixed", OwnerID: adminUser.ID, OwnerName: adminUser.UserName, Public: true}
+			pls := model.Playlist{Name: "Shared Mixed", OwnerID: adminUser.ID, OwnerName: adminUser.UserName, VisibleToUserIDs: []string{restrictedUser.ID}}
 			Expect(adminPls.Put(&pls)).To(Succeed())
 			plsID = pls.ID
 			DeferCleanup(func() { _ = adminPls.Delete(plsID) })

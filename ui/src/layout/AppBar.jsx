@@ -123,6 +123,7 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
   const classes = useStyles(rest)
   const { permissions } = usePermissions()
   const [showOnlineSearch, setShowOnlineSearch] = useState(false)
+  const [onlinePermissions, setOnlinePermissions] = useState({})
   const [downloadListOpen, setDownloadListOpen] = useState(false)
   const [downloadTaskState, setDownloadTaskState] = useState(emptyTaskState)
   const [playlistSyncTasks, setPlaylistSyncTasks] = useState([])
@@ -132,6 +133,7 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
       .then(({ json }) => {
         if (activeRef && !activeRef.current) return
         const visible = Boolean(json?.hasEnabledSource)
+        setOnlinePermissions(json?.permissions || {})
         setShowOnlineSearch(visible)
         if (!visible) {
           setDownloadListOpen(false)
@@ -156,8 +158,8 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
         return
       }
       Promise.all([
-        httpClient('/api/online/download/tasks'),
-        httpClient('/api/online/playlist/sync/tasks').catch(() => ({ json: { tasks: [] } })),
+        onlinePermissions.server ? httpClient('/api/online/download/tasks') : Promise.resolve({ json: {} }),
+        onlinePermissions.sync ? httpClient('/api/online/playlist/sync/tasks').catch(() => ({ json: { tasks: [] } })) : Promise.resolve({ json: { tasks: [] } }),
       ])
         .then(([downloadRes, syncRes]) => {
           if (activeRef && !activeRef.current) return
@@ -199,7 +201,7 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
           if (activeRef && !activeRef.current) return
         })
     },
-    [showOnlineSearch],
+    [showOnlineSearch, onlinePermissions],
   )
 
   useEffect(() => {
@@ -246,12 +248,12 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
     const streamURL = token
       ? `/api/online/download/tasks/stream?jwt=${encodeURIComponent(token)}`
       : '/api/online/download/tasks/stream'
-    const eventSource = new EventSource(streamURL)
+    const eventSource = onlinePermissions.server ? new EventSource(streamURL) : null
 
     const handleStreamChange = () => {
       refreshDownloadTasks(activeRef)
     }
-    eventSource.addEventListener('tasks-changed', handleStreamChange)
+    eventSource?.addEventListener('tasks-changed', handleStreamChange)
 
     const handleTaskChanged = (e) => {
       // Handle playlist sync tasks from the event
@@ -284,17 +286,19 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
     return () => {
       activeRef.current = false
       window.clearInterval(pollTimer)
-      eventSource.removeEventListener('tasks-changed', handleStreamChange)
-      eventSource.close()
+      eventSource?.removeEventListener('tasks-changed', handleStreamChange)
+      eventSource?.close()
       window.removeEventListener(
         ONLINE_DOWNLOAD_TASK_CHANGED_EVENT,
         handleTaskChanged,
       )
     }
-  }, [showOnlineSearch, refreshDownloadTasks])
+  }, [showOnlineSearch, refreshDownloadTasks, onlinePermissions])
 
   const postTaskAction = useCallback(
     (url) => {
+      const permission = url.startsWith('/api/online/download/') ? 'server' : 'sync'
+      if (!onlinePermissions[permission]) return Promise.resolve()
       return httpClient(url, {
         method: 'POST',
         body: JSON.stringify({}),
@@ -304,7 +308,7 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
         window.dispatchEvent(new Event(ONLINE_DOWNLOAD_TASK_CHANGED_EVENT))
       })
     },
-    [refreshDownloadTasks],
+    [refreshDownloadTasks, onlinePermissions],
   )
 
   const postCombinedTaskAction = useCallback(

@@ -8,6 +8,7 @@ import (
 
 	"github.com/Masterminds/squirrel"
 	"github.com/deluan/rest"
+	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/consts"
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
@@ -27,6 +28,31 @@ var _ = Describe("UserRepository", func() {
 	})
 
 	Describe("Put/Get/FindByUsername", func() {
+		It("persists independent online permissions and prevents self escalation", func() {
+			DeferCleanup(conf.SnapshotConfig())
+			conf.Server.EnableUserEditing = true
+			usr := model.User{ID: "permission-user", UserName: "permission-user", Name: "Permissions", NewPassword: "password", OnlineSearchEnabled: true, OnlinePlaylistSyncEnabled: true}
+			Expect(repo.Put(&usr)).To(Succeed())
+			saved, err := repo.Get(usr.ID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(saved.OnlineSearchEnabled).To(BeTrue())
+			Expect(saved.OnlineBrowserDownloadEnabled).To(BeFalse())
+			Expect(saved.OnlineServerDownloadEnabled).To(BeFalse())
+			Expect(saved.OnlinePlaylistSyncEnabled).To(BeTrue())
+			ctx := request.WithUser(GinkgoT().Context(), *saved)
+			selfRepo := NewUserRepository(ctx, GetDBXBuilder())
+			changed := *saved
+			changed.OnlineBrowserDownloadEnabled = true
+			changed.OnlineServerDownloadEnabled = true
+			changed.OnlinePlaylistSyncEnabled = false
+			Expect(selfRepo.(rest.Persistable).Update(usr.ID, &changed)).To(Succeed())
+			saved, err = repo.Get(usr.ID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(saved.OnlineBrowserDownloadEnabled).To(BeFalse())
+			Expect(saved.OnlineServerDownloadEnabled).To(BeFalse())
+			Expect(saved.OnlinePlaylistSyncEnabled).To(BeTrue())
+		})
+
 		usr := model.User{
 			ID:          "123",
 			UserName:    "AdMiN",

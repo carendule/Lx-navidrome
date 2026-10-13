@@ -573,6 +573,9 @@ var _ = Describe("Artwork hydration", func() {
 		})
 
 		It("keeps a non-admin from streaming another user's private playlists", func() {
+			shared := plsBest
+			shared.VisibleToUserIDs = []string{regularUser.ID}
+			Expect(playlistRepo.Put(&shared, "visible_to_user_ids")).To(Succeed())
 			otherCtx := request.WithUser(log.NewContext(context.Background()), regularUser)
 			repo := NewPlaylistRepository(otherCtx, GetDBXBuilder())
 			opts := model.QueryOptions{Sort: "name", Filters: onlyPlaylists}

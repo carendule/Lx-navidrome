@@ -25,6 +25,7 @@ import { Title } from '../common'
 import DeleteUserButton from './DeleteUserButton'
 import { LibrarySelectionField } from './LibrarySelectionField.jsx'
 import { validateUserForm } from './userValidation'
+import OnlinePermissionsInputs from './OnlinePermissionsInputs'
 
 const useStyles = makeStyles({
   toolbar: {
@@ -150,6 +151,7 @@ const UserEdit = (props) => {
         {permissions === 'admin' && (
           <BooleanInput source="isAdmin" initialValue={false} />
         )}
+        {permissions === 'admin' && <OnlinePermissionsInputs />}
 
         {/* Conditional Library Selection for Admin Users Only */}
         {permissions === 'admin' && (

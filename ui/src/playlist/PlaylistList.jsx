@@ -7,6 +7,9 @@ import {
   NullableBooleanInput,
   NumberField,
   ReferenceInput,
+  ReferenceArrayField,
+  SingleFieldList,
+  ChipField,
   SearchInput,
   SelectInput,
   TextField,
@@ -32,7 +35,6 @@ import {
 import FavoriteIcon from '@material-ui/icons/Favorite'
 import config from '../config'
 import PlaylistListActions from './PlaylistListActions'
-import ChangePublicStatusButton from './ChangePublicStatusButton'
 import MergePlaylistsButton from './MergePlaylistsButton'
 
 const useStyles = makeStyles((theme) => ({
@@ -65,38 +67,6 @@ const PlaylistFilter = (props) => {
         />
       )}
     </Filter>
-  )
-}
-
-const TogglePublicInput = ({ resource, source }) => {
-  const record = useRecordContext()
-  const notify = useNotify()
-  const [togglePublic] = useUpdate(
-    resource,
-    record.id,
-    {
-      ...record,
-      public: !record.public,
-    },
-    {
-      undoable: false,
-      onFailure: (error) => {
-        notify('ra.page.error', 'warning')
-      },
-    },
-  )
-
-  const handleClick = (e) => {
-    togglePublic()
-    e.stopPropagation()
-  }
-
-  return (
-    <Switch
-      checked={record[source]}
-      onClick={handleClick}
-      disabled={!isWritable(record.ownerId)}
-    />
   )
 }
 
@@ -138,16 +108,6 @@ const PlaylistListBulkActions = (props) => {
       {props.selectedIds?.length >= 2 && (
         <MergePlaylistsButton {...props} className={classes.button} />
       )}
-      <ChangePublicStatusButton
-        public={true}
-        {...props}
-        className={classes.button}
-      />
-      <ChangePublicStatusButton
-        public={false}
-        {...props}
-        className={classes.button}
-      />
       <BulkDeleteButton {...props} className={classes.button} />
     </>
   )
@@ -161,6 +121,7 @@ export const PlaylistLove = ({ record, className }) => (
 PlaylistLove.defaultProps = { source: 'starred', sortable: false }
 
 const PlaylistList = (props) => {
+  const { permissions } = usePermissions()
   const isXsmall = useMediaQuery((theme) => theme.breakpoints.down('xs'))
   const isDesktop = useMediaQuery((theme) => theme.breakpoints.up('md'))
   useResourceRefresh('playlist')
@@ -173,8 +134,12 @@ const PlaylistList = (props) => {
       updatedAt: isDesktop && (
         <DateField source="updatedAt" sortByOrder={'DESC'} />
       ),
-      public: !isXsmall && (
-        <TogglePublicInput source="public" sortByOrder={'DESC'} />
+      visibleToUserIds: permissions === 'admin' && !isXsmall && (
+        <ReferenceArrayField source="visibleToUserIds" reference="user" sortable={false}>
+          <SingleFieldList linkType={false}>
+            <ChipField source="userName" />
+          </SingleFieldList>
+        </ReferenceArrayField>
       ),
       comment: <TextField source="comment" />,
       sync: !isXsmall && (
@@ -182,7 +147,7 @@ const PlaylistList = (props) => {
       ),
       starred: config.enableFavourites && <PlaylistLove />,
     }),
-    [isDesktop, isXsmall],
+    [isDesktop, isXsmall, permissions],
   )
 
   const columns = useSelectedFields({

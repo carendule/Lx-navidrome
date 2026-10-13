@@ -11,7 +11,8 @@ import {
   ReferenceInput,
   SelectInput,
 } from 'react-admin'
-import { isWritable, Title } from '../common'
+import { Title } from '../common'
+import PlaylistVisibilityInput from './PlaylistVisibilityInput'
 
 const SyncFragment = ({ formData, variant, ...rest }) => {
   return (
@@ -58,7 +59,7 @@ const PlaylistEditForm = (props) => {
       ) : (
         <TextField source="ownerName" />
       )}
-      <BooleanInput source="public" disabled={!isWritable(record.ownerId)} />
+      <PlaylistVisibilityInput />
       <FormDataConsumer>
         {(formDataProps) => <SyncFragment {...formDataProps} />}
       </FormDataConsumer>

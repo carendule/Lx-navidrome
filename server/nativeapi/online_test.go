@@ -27,7 +27,42 @@ import (
 	"time"
 
 	"github.com/navidrome/navidrome/conf"
+	"github.com/navidrome/navidrome/model"
+	"github.com/navidrome/navidrome/model/request"
 )
+
+func TestOnlinePermissions(t *testing.T) {
+	for _, permission := range []string{"search", "browser", "server", "sync"} {
+		t.Run(permission, func(t *testing.T) {
+			for _, test := range []struct {
+				user    model.User
+				allowed bool
+			}{
+				{model.User{}, false},
+				{model.User{IsAdmin: true}, true},
+				{model.User{OnlineSearchEnabled: true}, permission == "search"},
+				{model.User{OnlineSearchEnabled: true, OnlineBrowserDownloadEnabled: true}, permission == "search" || permission == "browser"},
+				{model.User{OnlineSearchEnabled: true, OnlineServerDownloadEnabled: true}, permission == "search" || permission == "server"},
+				{model.User{OnlineSearchEnabled: true, OnlinePlaylistSyncEnabled: true}, permission == "search" || permission == "sync"},
+				{model.User{OnlineBrowserDownloadEnabled: true, OnlineServerDownloadEnabled: true, OnlinePlaylistSyncEnabled: true}, false},
+			} {
+				recorder := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodGet, "/", nil)
+				req = req.WithContext(request.WithUser(req.Context(), test.user))
+				requireOnlinePermission(permission)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusNoContent)
+				})).ServeHTTP(recorder, req)
+				want := http.StatusForbidden
+				if test.allowed {
+					want = http.StatusNoContent
+				}
+				if recorder.Code != want {
+					t.Fatalf("user=%+v: got %d, want %d", test.user, recorder.Code, want)
+				}
+			}
+		})
+	}
+}
 
 // ===== from online_download_test.go =====
 

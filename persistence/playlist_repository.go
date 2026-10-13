@@ -22,11 +22,17 @@ type playlistRepository struct {
 }
 
 type dbPlaylist struct {
-	model.Playlist `structs:",flatten"`
-	Rules          sql.NullString `structs:"-"`
+	model.Playlist   `structs:",flatten"`
+	Rules            sql.NullString `structs:"-"`
+	VisibleToUserIDs string         `structs:"-"`
 }
 
 func (p *dbPlaylist) PostScan() error {
+	if p.VisibleToUserIDs != "" && p.VisibleToUserIDs != "[]" {
+		if err := json.Unmarshal([]byte(p.VisibleToUserIDs), &p.Playlist.VisibleToUserIDs); err != nil {
+			return err
+		}
+	}
 	if p.Rules.String != "" {
 		return json.Unmarshal([]byte(p.Rules.String), &p.Playlist.Rules)
 	}
@@ -34,7 +40,14 @@ func (p *dbPlaylist) PostScan() error {
 }
 
 func (p dbPlaylist) PostMapArgs(args map[string]any) error {
-	var err error
+	visible, err := json.Marshal(p.Playlist.VisibleToUserIDs)
+	if err != nil {
+		return err
+	}
+	if p.Playlist.VisibleToUserIDs == nil {
+		visible = []byte("[]")
+	}
+	args["visible_to_user_ids"] = string(visible)
 	if p.Playlist.IsSmartPlaylist() {
 		args["rules"], err = json.Marshal(p.Playlist.Rules)
 		if err != nil {
@@ -87,7 +100,7 @@ func (r *playlistRepository) userFilter() Sqlizer {
 		return And{}
 	}
 	return Or{
-		Eq{"public": true},
+		Expr("EXISTS (SELECT 1 FROM json_each(playlist.visible_to_user_ids) WHERE value = ?)", user.ID),
 		Eq{"owner_id": user.ID},
 	}
 }

@@ -3,6 +3,7 @@ package playlists
 import (
 	"context"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/deluan/rest"
@@ -56,6 +57,9 @@ func (s *playlists) TracksRepository(ctx context.Context, playlistId string, ref
 // Only Name, Comment, Public, and Rules are user-settable via the REST API.
 func (s *playlists) savePlaylist(ctx context.Context, pls *model.Playlist) (string, error) {
 	usr, _ := request.UserFrom(ctx)
+	if !usr.IsAdmin && len(pls.VisibleToUserIDs) > 0 {
+		return "", rest.ErrPermissionDenied
+	}
 	pls.OwnerID = usr.ID
 	pls.ID = ""               // Force new creation
 	pls.Path = ""             // Server-managed (M3U file path)
@@ -89,6 +93,10 @@ func (s *playlists) updatePlaylistEntity(ctx context.Context, id string, entity 
 	sent := sentFields(cols)
 
 	usr, _ := request.UserFrom(ctx)
+	visibilityChanged := sent("visibleToUserIds") && !slices.Equal(entity.VisibleToUserIDs, current.VisibleToUserIDs)
+	if visibilityChanged && !usr.IsAdmin {
+		return rest.ErrPermissionDenied
+	}
 	ownerChanged := sent("ownerId") && entity.OwnerID != "" && entity.OwnerID != current.OwnerID
 	if !usr.IsAdmin && ownerChanged {
 		return rest.ErrPermissionDenied
@@ -99,6 +107,9 @@ func (s *playlists) updatePlaylistEntity(ctx context.Context, id string, entity 
 	rulesChanged := sent("rules") && !rulesEqual(current.Rules, entity.Rules)
 
 	if nameChanged || commentChanged || ownerChanged || rulesChanged {
+		if visibilityChanged {
+			current.VisibleToUserIDs = entity.VisibleToUserIDs
+		}
 		return s.applyContentUpdate(ctx, current, entity, sent,
 			nameChanged, commentChanged, ownerChanged, rulesChanged)
 	}
@@ -145,6 +156,10 @@ func (s *playlists) applyFlagsOnly(ctx context.Context, current, entity *model.P
 	sent func(string) bool,
 ) error {
 	var updateCols []string
+	if sent("visibleToUserIds") && !slices.Equal(current.VisibleToUserIDs, entity.VisibleToUserIDs) {
+		current.VisibleToUserIDs = entity.VisibleToUserIDs
+		updateCols = append(updateCols, "visible_to_user_ids")
+	}
 	if sent("sync") && current.Path != "" && current.Sync != entity.Sync {
 		current.Sync = entity.Sync
 		updateCols = append(updateCols, "sync")

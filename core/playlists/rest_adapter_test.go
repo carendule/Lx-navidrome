@@ -93,6 +93,19 @@ var _ = Describe("REST Adapter", func() {
 		})
 
 		Describe("Update", func() {
+			It("allows only admins to change visibility, including clearing the list", func() {
+				ctx = request.WithUser(ctx, model.User{ID: "user-1"})
+				repo = ps.NewRepository(ctx).(rest.Persistable)
+				entity := &model.Playlist{VisibleToUserIDs: []string{"other-user"}}
+				Expect(repo.Update("pls-1", entity, "visibleToUserIds")).To(Equal(rest.ErrPermissionDenied))
+				ctx = request.WithUser(ctx, model.User{ID: "admin-1", IsAdmin: true})
+				repo = ps.NewRepository(ctx).(rest.Persistable)
+				Expect(repo.Update("pls-1", entity, "visibleToUserIds")).To(Succeed())
+				Expect(mockPlsRepo.Last.VisibleToUserIDs).To(Equal([]string{"other-user"}))
+				Expect(repo.Update("pls-1", &model.Playlist{}, "visibleToUserIds")).To(Succeed())
+				Expect(mockPlsRepo.Last.VisibleToUserIDs).To(BeEmpty())
+			})
+
 			It("allows owner to update their playlist", func() {
 				ctx = request.WithUser(ctx, model.User{ID: "user-1", IsAdmin: false})
 				repo = ps.NewRepository(ctx).(rest.Persistable)

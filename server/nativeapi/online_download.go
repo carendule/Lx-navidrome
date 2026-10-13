@@ -649,28 +649,34 @@ func (api *Router) addOnlineDownloadRoutes(r chi.Router) {
 	startStallDetector()
 
 	r.Route("/online/download", func(r chi.Router) {
-		r.Post("/server/start", api.onlineServerDownloadStart)
-		r.Get("/tasks", api.onlineServerDownloadTasks)
-		r.Get("/tasks/stream", api.onlineServerDownloadTasksStream)
-		r.Post("/task/{taskID}/toggle", api.onlineServerDownloadToggle)
-		r.Post("/tasks/retry", api.onlineServerDownloadRetryAll)
-		r.Post("/tasks/cancel", api.onlineServerDownloadCancelAll)
-		r.Post("/tasks/clear-completed", api.onlineServerDownloadClearCompleted)
-		r.Post("/tasks/clear-failed", api.onlineServerDownloadClearFailed)
-		r.Post("/browser/start", api.onlineBrowserDownloadStart)
-		r.Get("/browser/progress/{taskID}", api.onlineBrowserDownloadProgress)
-		r.Get("/browser/file/{taskID}", api.onlineBrowserDownloadFile)
-		r.Post("/browser", api.onlineBrowserDownload)
+		r.With(requireOnlinePermission("server")).Group(func(r chi.Router) {
+			r.Post("/server/start", api.onlineServerDownloadStart)
+			r.Get("/tasks", api.onlineServerDownloadTasks)
+			r.Get("/tasks/stream", api.onlineServerDownloadTasksStream)
+			r.Post("/task/{taskID}/toggle", api.onlineServerDownloadToggle)
+			r.Post("/tasks/retry", api.onlineServerDownloadRetryAll)
+			r.Post("/tasks/cancel", api.onlineServerDownloadCancelAll)
+			r.Post("/tasks/clear-completed", api.onlineServerDownloadClearCompleted)
+			r.Post("/tasks/clear-failed", api.onlineServerDownloadClearFailed)
+		})
+		r.With(requireOnlinePermission("browser")).Group(func(r chi.Router) {
+			r.Post("/browser/start", api.onlineBrowserDownloadStart)
+			r.Get("/browser/progress/{taskID}", api.onlineBrowserDownloadProgress)
+			r.Get("/browser/file/{taskID}", api.onlineBrowserDownloadFile)
+			r.Post("/browser", api.onlineBrowserDownload)
+		})
 	})
 
 	// Playlist sync endpoints require authenticated user context.
-	r.Post("/online/playlist/sync/start", handlePlaylistSyncStart)
-	r.Get("/online/playlist/sync/status/{taskID}", handlePlaylistSyncStatus)
-	r.Get("/online/playlist/sync/tasks", handlePlaylistSyncTasks)
-	r.Post("/online/playlist/sync/tasks/retry", handlePlaylistSyncRetryAll)
-	r.Post("/online/playlist/sync/tasks/cancel", handlePlaylistSyncCancelAll)
-	r.Post("/online/playlist/sync/tasks/clear-completed", handlePlaylistSyncClearCompleted)
-	r.Post("/online/playlist/sync/tasks/clear-failed", handlePlaylistSyncClearFailed)
+	r.With(requireOnlinePermission("sync")).Group(func(r chi.Router) {
+		r.Post("/online/playlist/sync/start", handlePlaylistSyncStart)
+		r.Get("/online/playlist/sync/status/{taskID}", handlePlaylistSyncStatus)
+		r.Get("/online/playlist/sync/tasks", handlePlaylistSyncTasks)
+		r.Post("/online/playlist/sync/tasks/retry", handlePlaylistSyncRetryAll)
+		r.Post("/online/playlist/sync/tasks/cancel", handlePlaylistSyncCancelAll)
+		r.Post("/online/playlist/sync/tasks/clear-completed", handlePlaylistSyncClearCompleted)
+		r.Post("/online/playlist/sync/tasks/clear-failed", handlePlaylistSyncClearFailed)
+	})
 }
 
 func (api *Router) onlineBrowserDownloadStart(w http.ResponseWriter, r *http.Request) {

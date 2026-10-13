@@ -118,6 +118,26 @@ describe('<UserEdit />', () => {
     expect(screen.getByTestId('boolean-input-isAdmin')).toBeInTheDocument()
   })
 
+  it('only exposes online permission controls to admins', () => {
+    const { unmount } = render(<UserEdit id="user1" permissions="admin" />)
+    const fields = [
+      'onlineSearchEnabled',
+      'onlineBrowserDownloadEnabled',
+      'onlineServerDownloadEnabled',
+      'onlinePlaylistSyncEnabled',
+    ]
+    fields.forEach((field) =>
+      expect(screen.getByTestId(`boolean-input-${field}`)).toBeInTheDocument(),
+    )
+    unmount()
+    render(<UserEdit id="user1" permissions="user" />)
+    fields.forEach((field) =>
+      expect(
+        screen.queryByTestId(`boolean-input-${field}`),
+      ).not.toBeInTheDocument(),
+    )
+  })
+
   it('should render date fields', () => {
     render(<UserEdit id="user1" permissions="admin" />)
 

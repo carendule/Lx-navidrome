@@ -16,6 +16,7 @@ import {
 import { Typography } from '@material-ui/core'
 import { Title } from '../common'
 import { LibrarySelectionField } from './LibrarySelectionField.jsx'
+import OnlinePermissionsInputs from './OnlinePermissionsInputs'
 
 const UserCreate = (props) => {
   const translate = useTranslate()
@@ -75,6 +76,7 @@ const UserCreate = (props) => {
           validate={[required()]}
         />
         <BooleanInput source="isAdmin" defaultValue={false} />
+        <OnlinePermissionsInputs />
 
         {/* Conditional Library Selection */}
         <FormDataConsumer>

@@ -1,5 +1,5 @@
 import React from 'react'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { describe, it, beforeEach, vi } from 'vitest'
 import { Provider } from 'react-redux'
 import { createStore, combineReducers } from 'redux'
@@ -8,12 +8,16 @@ import AppBar from './AppBar'
 import config from '../config'
 
 let store
+const onlineMocks = vi.hoisted(() => ({ httpClient: vi.fn() }))
+
+vi.mock('../dataProvider', () => ({ httpClient: onlineMocks.httpClient }))
 
 vi.mock('react-admin', () => ({
   AppBar: ({ userMenu }) => <div data-testid="appbar">{userMenu}</div>,
   useTranslate: () => (x) => x,
   usePermissions: () => ({ permissions: 'admin' }),
   getResources: () => [],
+  MenuItemLink: ({ primaryText }) => <span>{primaryText}</span>,
 }))
 
 vi.mock('./NowPlayingPanel', () => ({
@@ -38,6 +42,10 @@ vi.mock('../dialogs', () => ({
 
 describe('<AppBar />', () => {
   beforeEach(() => {
+    onlineMocks.httpClient.mockReset()
+    onlineMocks.httpClient.mockResolvedValue({
+      json: { hasEnabledSource: false },
+    })
     config.devActivityPanel = true
     config.enableNowPlaying = true
     config.enableQuickConnect = false
@@ -53,6 +61,32 @@ describe('<AppBar />', () => {
       </Provider>,
     )
     expect(screen.getByTestId('now-playing-panel')).toBeInTheDocument()
+  })
+
+  it('loads sync tasks without requesting server downloads when only sync is allowed', async () => {
+    onlineMocks.httpClient.mockImplementation((url) =>
+      Promise.resolve({
+        json: url.endsWith('/status')
+          ? {
+            hasEnabledSource: true,
+            permissions: { search: true, sync: true, server: false },
+          }
+          : { tasks: [] },
+      }),
+    )
+    render(
+      <Provider store={store}>
+        <AppBar />
+      </Provider>,
+    )
+    await waitFor(() =>
+      expect(onlineMocks.httpClient).toHaveBeenCalledWith(
+        '/api/online/playlist/sync/tasks',
+      ),
+    )
+    expect(onlineMocks.httpClient).not.toHaveBeenCalledWith(
+      '/api/online/download/tasks',
+    )
   })
 
   it('hides NowPlayingPanel when disabled', () => {

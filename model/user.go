@@ -5,15 +5,19 @@ import (
 )
 
 type User struct {
-	ID           string     `structs:"id" json:"id"`
-	UserName     string     `structs:"user_name" json:"userName"`
-	Name         string     `structs:"name" json:"name"`
-	Email        string     `structs:"email" json:"email"`
-	IsAdmin      bool       `structs:"is_admin" json:"isAdmin"`
-	LastLoginAt  *time.Time `structs:"last_login_at" json:"lastLoginAt"`
-	LastAccessAt *time.Time `structs:"last_access_at" json:"lastAccessAt"`
-	CreatedAt    time.Time  `structs:"created_at" json:"createdAt"`
-	UpdatedAt    time.Time  `structs:"updated_at" json:"updatedAt"`
+	ID                           string     `structs:"id" json:"id"`
+	UserName                     string     `structs:"user_name" json:"userName"`
+	Name                         string     `structs:"name" json:"name"`
+	Email                        string     `structs:"email" json:"email"`
+	IsAdmin                      bool       `structs:"is_admin" json:"isAdmin"`
+	OnlineSearchEnabled          bool       `structs:"online_search_enabled" json:"onlineSearchEnabled"`
+	OnlineBrowserDownloadEnabled bool       `structs:"online_browser_download_enabled" json:"onlineBrowserDownloadEnabled"`
+	OnlineServerDownloadEnabled  bool       `structs:"online_server_download_enabled" json:"onlineServerDownloadEnabled"`
+	OnlinePlaylistSyncEnabled    bool       `structs:"online_playlist_sync_enabled" json:"onlinePlaylistSyncEnabled"`
+	LastLoginAt                  *time.Time `structs:"last_login_at" json:"lastLoginAt"`
+	LastAccessAt                 *time.Time `structs:"last_access_at" json:"lastAccessAt"`
+	CreatedAt                    time.Time  `structs:"created_at" json:"createdAt"`
+	UpdatedAt                    time.Time  `structs:"updated_at" json:"updatedAt"`
 	// Smart-playlist criteria JSON; matching songs are not sent to external scrobblers
 	ScrobbleFilter string `structs:"scrobble_filter" json:"scrobbleFilter"`
 
